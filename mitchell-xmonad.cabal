@@ -1,0 +1,14 @@
+name: mitchell-xmonad
+version: 1
+build-type: Simple
+cabal-version: >= 1.2
+
+executable mitchell-xmonad
+  main-is: Main.hs
+  build-depends: 
+      base
+    , containers
+    , xmonad
+    , xmonad-contrib
+    , X11
+  ghc-options: -Wall -O2
