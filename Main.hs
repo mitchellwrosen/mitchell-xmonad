@@ -1,22 +1,18 @@
-{-# language NamedFieldPuns        #-}
 {-# language PartialTypeSignatures #-}
 {-# language RecordWildCards       #-}
-{-# language TypeOperators         #-}
 
 import Data.Bits ((.|.))
 import Data.Map (Map)
 import Data.Monoid (All, Endo)
-import Data.Word (Word32)
 import System.Exit (ExitCode(ExitSuccess), exitWith)
 import System.IO (Handle, hPutStrLn)
 import Graphics.X11.Types
   (enterWindowMask, propertyChangeMask, structureNotifyMask)
 import XMonad
-  (Button, ButtonMask, ChangeLayout(NextLayout), Choose, Event, EventMask,
-    Full(Full), IncMasterN(IncMasterN), KeyMask, KeySym, Layout, ManageHook,
-    Mirror(Mirror), Query, Resize(Expand, Shrink), Tall(Tall), Window,
-    WindowSet, WindowSpace, WorkspaceId, X, XConfig(XConfig), (|||), def, io,
-    launch, mod4Mask, sendMessage, withFocused, xC_top_left_arrow)
+  (Button, ButtonMask, Event, EventMask, Full(Full), IncMasterN(IncMasterN),
+    KeyMask, KeySym, Layout, Query, Resize(Expand, Shrink), Window, WindowSet,
+    WindowSpace, WorkspaceId, X, XConfig(XConfig), def, io, launch, mod4Mask,
+    sendMessage, withFocused, xC_top_left_arrow)
 import XMonad.Actions.CycleWS
   (Direction1D(Next, Prev), WSType(AnyWS), moveTo, shiftTo)
 import XMonad.Hooks.DynamicLog
@@ -25,20 +21,17 @@ import XMonad.Hooks.DynamicLog
 import XMonad.Hooks.InsertPosition
   (Focus(Newer), Position(Below), insertPosition)
 import XMonad.Hooks.ManageDocks
-  (AvoidStruts, avoidStruts, docksEventHook, docksStartupHook, manageDocks)
+  (avoidStruts, docksEventHook, docksStartupHook, manageDocks)
 import XMonad.Hooks.SetWMName (setWMName)
 import XMonad.Layout.FixedColumn (FixedColumn(FixedColumn))
-import XMonad.Layout.LayoutModifier (ModifiedLayout)
-import XMonad.Layout.Magnifier (Magnifier, magnifiercz')
 import XMonad.Layout.NoBorders
 import XMonad.Layout.ToggleLayouts
-import XMonad.Operations (float, kill, restart, windows)
+import XMonad.Operations (kill, restart, windows)
 import XMonad.StackSet
   (focusDown, focusUp, sink, swapDown, swapMaster, swapUp)
 import XMonad.Util.Cursor (setDefaultCursor)
 import XMonad.Util.EZConfig (mkKeymap)
 import XMonad.Util.Run (safeSpawn, spawnPipe)
-import XMonad.Util.Scratchpad
 import XMonad.Util.WorkspaceCompare (getSortByIndex)
 
 import qualified XMonad as X
@@ -161,7 +154,7 @@ logHook xmobar = dynamicLogWithPP PP{..}
   ppSep = xmobarColor "orange" "" " | "
 
   ppSort :: X ([WindowSpace] -> [WindowSpace])
-  ppSort = (. scratchpadFilterOutWorkspace) <$> getSortByIndex
+  ppSort = getSortByIndex
 
   ppTitle :: String -> String
   ppTitle = xmobarColor "lightblue" "" . shorten 120
