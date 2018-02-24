@@ -5,7 +5,7 @@ cabal-version: >= 1.2
 
 executable mitchell-xmonad
   main-is: Main.hs
-  build-depends: 
+  build-depends:
       base
     , containers
     , xmonad

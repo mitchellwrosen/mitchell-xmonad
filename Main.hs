@@ -172,7 +172,7 @@ logHook xmobar = dynamicLogWithPP PP{..}
   ppWsSep = " "
 
 rootMask :: EventMask
-rootMask = 
+rootMask =
   X.rootMask def
 
 startupHook :: X ()
@@ -247,7 +247,7 @@ myKeymap =
   , ("M-M1-l", sendMessage Expand)
 
   -- Mod-Shift-r: restart xmonad
-  , ("M-S-r", restart "/home/mitchell/.local/bin/mitchell-xmonad" True)
+  , ("M-S-r", restart "mitchell-xmonad" True)
 
   -- Mod-Shift-q: quit xmonad.
   , ("M-S-q", io (exitWith ExitSuccess))
