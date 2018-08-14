@@ -1,3 +1,11 @@
-resolver: lts-10.5
-extra-deps:
-  - iwlib-0.1.0
+resolver: lts-11.8
+
+# extra-deps:
+#   - iwlib-0.1.0
+
+# flags:
+#   xmobar:
+#     with_alsa: true
+#     with_iwlib: true
+#     with_utf8: true
+#     with_xft: true

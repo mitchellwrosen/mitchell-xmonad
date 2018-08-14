@@ -44,7 +44,7 @@ main = do
   launch XConfig
     { -- How many pixels wide should the border of the currently-selected
       -- window be?
-      X.borderWidth = 4
+      X.borderWidth = 2
 
       -- When manually clicking on a window to focus it, should that click also
       -- be delivered to the window? 'True' means no, just focus it.
@@ -56,7 +56,7 @@ main = do
     , X.focusFollowsMouse = False
 
       -- Focused window border color.
-    , X.focusedBorderColor = "#444444"
+    , X.focusedBorderColor = "#3F607F"
 
       -- Rebind Mod to the Windows key.
     , X.modMask = mod4Mask
@@ -91,9 +91,9 @@ layoutHook =
     (toggleLayouts
       -- Fullscreen mode, without wasting any pixels drawing a border.
       (noBorders Full)
-      -- Normal mode (80-column-wide window), with a border around the
+      -- Normal mode (82-column-wide window), with a border around the
       -- currently-focused window if there's more than one window).
-      (smartBorders (FixedColumn 1 1 80 1)))
+      (smartBorders (FixedColumn 1 1 82 1)))
 
 -- Our preferred terminal application.
 terminal :: String
