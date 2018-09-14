@@ -89,11 +89,11 @@ layoutHook :: _
 layoutHook =
   avoidStruts
     (toggleLayouts
-      -- Fullscreen mode, without wasting any pixels drawing a border.
-      (noBorders Full)
       -- Normal mode (82-column-wide window), with a border around the
       -- currently-focused window if there's more than one window).
-      (smartBorders (FixedColumn 1 1 82 1)))
+      (smartBorders (FixedColumn 1 1 82 1))
+      -- Fullscreen mode, without wasting any pixels drawing a border.
+      (noBorders Full))
 
 -- Our preferred terminal application.
 terminal :: String
