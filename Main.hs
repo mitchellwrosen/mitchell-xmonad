@@ -9,9 +9,10 @@ import System.IO (Handle, hPutStrLn)
 import Graphics.X11.Types
   (enterWindowMask, propertyChangeMask, structureNotifyMask)
 import XMonad
-  (Button, ButtonMask, Event, EventMask, Full(Full), IncMasterN(IncMasterN),
-    KeyMask, KeySym, Layout, Query, Resize(Expand, Shrink), Window, WindowSet,
-    WindowSpace, WorkspaceId, X, XConfig(XConfig), def, io, launch, mod4Mask,
+  (Button, ButtonMask, ChangeLayout(NextLayout), Event, EventMask, Full(Full),
+    IncMasterN(IncMasterN), KeyMask, KeySym, Layout, Query,
+    Resize(Expand, Shrink), Tall(Tall), Window, WindowSet, WindowSpace,
+    WorkspaceId, X, XConfig(XConfig), (|||), def, io, launch, mod4Mask,
     sendMessage, withFocused, xC_top_left_arrow)
 import XMonad.Actions.CycleWS
   (Direction1D(Next, Prev), WSType(AnyWS), moveTo, shiftTo)
@@ -91,7 +92,7 @@ layoutHook =
     (toggleLayouts
       -- Normal mode (82-column-wide window), with a border around the
       -- currently-focused window if there's more than one window).
-      (smartBorders (FixedColumn 1 1 82 1))
+      (smartBorders (FixedColumn 1 1 82 1 ||| Tall 1 (3/100) (1/2)))
       -- Fullscreen mode, without wasting any pixels drawing a border.
       (noBorders Full))
 
@@ -215,6 +216,9 @@ myKeymap =
 
   -- Mod-f: toggle fullscreen.
   , ("M-f", sendMessage ToggleLayout)
+
+  -- Mod-space: next layout
+  , ("M-<Space>", sendMessage NextLayout)
 
   -- Mod-h and Mod-l: move left and right through workspaces.
   , ("M-h", moveTo Prev AnyWS)
