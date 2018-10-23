@@ -5,10 +5,13 @@ cabal-version: >= 1.2
 
 executable mitchell-xmonad
   main-is: Main.hs
+  other-modules: Debug, FixedColumn
   build-depends:
       base
     , containers
+    , mtl
+    , unix
     , xmonad
     , xmonad-contrib
     , X11
-  ghc-options: -Wall -O2
+  ghc-options: -Wall -O

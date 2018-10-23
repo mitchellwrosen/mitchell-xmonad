@@ -1,41 +1,52 @@
-{-# language PartialTypeSignatures #-}
-{-# language RecordWildCards       #-}
+{-# LANGUAGE LambdaCase, PartialTypeSignatures, RecordWildCards,
+             ScopedTypeVariables #-}
 
-import Data.Bits ((.|.))
-import Data.Map (Map)
-import Data.Monoid (All, Endo)
-import System.Exit (ExitCode(ExitSuccess), exitWith)
-import System.IO (Handle, hPutStrLn)
-import Graphics.X11.Types
-  (enterWindowMask, propertyChangeMask, structureNotifyMask)
-import XMonad
-  (Button, ButtonMask, ChangeLayout(NextLayout), Event, EventMask, Full(Full),
-    IncMasterN(IncMasterN), KeyMask, KeySym, Layout, Query,
-    Resize(Expand, Shrink), Tall(Tall), Window, WindowSet, WindowSpace,
-    WorkspaceId, X, XConfig(XConfig), (|||), def, io, launch, mod4Mask,
-    sendMessage, withFocused, xC_top_left_arrow)
-import XMonad.Actions.CycleWS
-  (Direction1D(Next, Prev), WSType(AnyWS), moveTo, shiftTo)
-import XMonad.Hooks.DynamicLog
-  (PP(..), dynamicLogWithPP, dzenEscape, shorten, wrap, xmobarColor,
-    xmobarStrip)
-import XMonad.Hooks.InsertPosition
-  (Focus(Newer), Position(Below), insertPosition)
-import XMonad.Hooks.ManageDocks
-  (avoidStruts, docksEventHook, docksStartupHook, manageDocks)
-import XMonad.Hooks.SetWMName (setWMName)
-import XMonad.Layout.FixedColumn (FixedColumn(FixedColumn))
+{-# OPTIONS_GHC -fno-warn-partial-type-signatures #-}
+
+import Control.Monad.IO.Class
+import Control.Monad.State
+import Data.Bits                    ((.|.))
+import Data.Map                     (Map)
+import Data.Monoid                  (All, Endo)
+import Debug
+import FixedColumn                  (FixedColumn(FixedColumn))
+import Graphics.X11.Types           (enterWindowMask, propertyChangeMask,
+                                     structureNotifyMask)
+import System.Exit                  (ExitCode(ExitSuccess), exitWith)
+import System.IO
+import System.Posix.Files           (readSymbolicLink)
+import XMonad                       (Button, ButtonMask,
+                                     ChangeLayout(NextLayout), Event, EventMask,
+                                     Full(Full), IncMasterN(IncMasterN),
+                                     KeyMask, KeySym, Layout, Query,
+                                     Resize(Expand, Shrink), Tall(Tall), Window,
+                                     WindowSet, WindowSpace, WorkspaceId, X,
+                                     XConfig(XConfig), def, io, launch,
+                                     mod4Mask, sendMessage, withFocused,
+                                     xC_top_left_arrow, (|||))
+import XMonad.Actions.CycleWS       (Direction1D(Next, Prev), WSType(AnyWS),
+                                     moveTo, shiftTo)
+import XMonad.Hooks.DynamicLog      (PP(..), dynamicLogWithPP, dzenEscape,
+                                     shorten, wrap, xmobarColor, xmobarStrip)
+import XMonad.Hooks.InsertPosition  (Focus(Newer), Position(Below),
+                                     insertPosition)
+import XMonad.Hooks.ManageDocks     (avoidStruts, docksEventHook,
+                                     docksStartupHook, manageDocks)
+import XMonad.Hooks.SetWMName       (setWMName)
 import XMonad.Layout.NoBorders
 import XMonad.Layout.ToggleLayouts
-import XMonad.Operations (kill, restart, windows)
-import XMonad.StackSet
-  (focusDown, focusUp, sink, swapDown, swapMaster, swapUp)
-import XMonad.Util.Cursor (setDefaultCursor)
-import XMonad.Util.EZConfig (mkKeymap)
-import XMonad.Util.Run (safeSpawn, spawnPipe)
+import XMonad.Operations            (kill, restart, windows)
+import XMonad.StackSet              (focusDown, focusUp, sink, swapDown,
+                                     swapMaster, swapUp)
+import XMonad.Util.Cursor           (setDefaultCursor)
+import XMonad.Util.EZConfig         (mkKeymap)
+import XMonad.Util.Run              (safeSpawn, spawnPipe)
 import XMonad.Util.WorkspaceCompare (getSortByIndex)
 
-import qualified XMonad as X
+import qualified XMonad                     as X
+import qualified XMonad.Hooks.ManageHelpers
+import qualified XMonad.StackSet
+import qualified XMonad.Util.Run
 
 -- Main entrypoint: spawn xmobar, then launch xmonad.
 main :: IO ()
@@ -92,14 +103,14 @@ layoutHook =
     (toggleLayouts
       -- Normal mode (82-column-wide window), with a border around the
       -- currently-focused window if there's more than one window).
-      (smartBorders (FixedColumn 1 1 82 1 ||| Tall 1 (3/100) (1/2)))
+      (smartBorders (FixedColumn 1 1 82 12 ||| Tall 1 (3/100) (1/2)))
       -- Fullscreen mode, without wasting any pixels drawing a border.
       (noBorders Full))
 
 -- Our preferred terminal application.
 terminal :: String
 terminal =
-  "urxvt"
+  "alacritty"
 
 keys :: XConfig l -> Map (KeyMask, KeySym) (X ())
 keys cfg = mkKeymap cfg myKeymap
@@ -202,8 +213,24 @@ myKeymap =
     ("M--", sendMessage (IncMasterN (-1)))
   , ("M-=", sendMessage (IncMasterN 1))
 
-  -- Mod-enter: spawn a terminal.
-  , ("M-<Return>", safeSpawn terminal [])
+  -- Mod-enter: spawn a terminal in the current directory.
+  , ("M-<Return>", do
+      windowset :: WindowSet <- gets X.windowset
+      case XMonad.StackSet.peek windowset of
+        Nothing ->
+          safeSpawn terminal []
+
+        Just w ->
+          X.runQuery XMonad.Hooks.ManageHelpers.pid w >>= \case
+            Nothing ->
+              safeSpawn terminal []
+            Just pid -> do
+              lines <$> XMonad.Util.Run.runProcessWithInput "pgrep" ["-P", show pid] "" >>= \case
+                [child] -> do
+                  cwd <- liftIO (readSymbolicLink ("/proc/" ++ child ++ "/cwd"))
+                  safeSpawn terminal ["--working-directory", cwd]
+                _ -> do
+                  safeSpawn terminal [])
 
   -- Mod-i: spawn a web browser.
   , ("M-i", safeSpawn "google-chrome-stable" [])
