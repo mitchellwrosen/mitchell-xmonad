@@ -8,8 +8,10 @@ executable mitchell-xmonad
   other-modules: Debug, FixedColumn
   build-depends:
       base
+    , bytestring
     , containers
     , mtl
+    , transformers
     , unix
     , xmonad
     , xmonad-contrib

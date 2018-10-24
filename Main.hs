@@ -1,20 +1,22 @@
-{-# LANGUAGE LambdaCase, PartialTypeSignatures, RecordWildCards,
-             ScopedTypeVariables #-}
-
-{-# OPTIONS_GHC -fno-warn-partial-type-signatures #-}
+{-# LANGUAGE LambdaCase, OverloadedStrings, PartialTypeSignatures,
+             RecordWildCards, ScopedTypeVariables #-}
+{-# OPTIONS_GHC -fno-warn-missing-signatures #-}
 
 import Control.Monad.IO.Class
 import Control.Monad.State
-import Data.Bits                    ((.|.))
-import Data.Map                     (Map)
-import Data.Monoid                  (All, Endo)
-import Debug
+import Control.Monad.Trans.Maybe
+import Data.Bits                 ((.|.))
+import Data.ByteString           (ByteString)
+import Data.Map                  (Map)
+import Data.Monoid               (All, Endo)
+-- import Debug
 import FixedColumn                  (FixedColumn(FixedColumn))
 import Graphics.X11.Types           (enterWindowMask, propertyChangeMask,
                                      structureNotifyMask)
 import System.Exit                  (ExitCode(ExitSuccess), exitWith)
 import System.IO
 import System.Posix.Files           (readSymbolicLink)
+import System.Posix.Types
 import XMonad                       (Button, ButtonMask,
                                      ChangeLayout(NextLayout), Event, EventMask,
                                      Full(Full), IncMasterN(IncMasterN),
@@ -43,15 +45,27 @@ import XMonad.Util.EZConfig         (mkKeymap)
 import XMonad.Util.Run              (safeSpawn, spawnPipe)
 import XMonad.Util.WorkspaceCompare (getSortByIndex)
 
+import qualified Data.ByteString            as ByteString
 import qualified XMonad                     as X
 import qualified XMonad.Hooks.ManageHelpers
+import qualified XMonad.Layout
 import qualified XMonad.StackSet
 import qualified XMonad.Util.Run
+
+(∘) = (.)
+(⨾) = flip (.)
+
+δ :: Functor f => (a -> b) -> (f a -> f b)
+δ = fmap
+
+δ² :: (Functor f, Functor g) => (a -> b) -> (f (g a)) -> (f (g b))
+δ² = fmap ∘ fmap
 
 -- Main entrypoint: spawn xmobar, then launch xmonad.
 main :: IO ()
 main = do
-  xmobar <- spawnPipe "xmobar /home/mitchell/.xmobarrc"
+  xmobar :: Handle <-
+    spawnPipe "xmobar /home/mitchell/.xmobarrc"
 
   launch XConfig
     { -- How many pixels wide should the border of the currently-selected
@@ -77,7 +91,7 @@ main = do
     , X.normalBorderColor = "#000000"
 
       -- The list of workspace names.
-    , X.workspaces = ["1", "2", "3", "4", "5", "6"]
+    , X.workspaces = ["α", "β", "γ", "δ", "ε", "ζ"]
 
     , X.handleEventHook = handleEventHook
     , X.handleExtraArgs = handleExtraArgs
@@ -97,23 +111,24 @@ clientMask =
   enterWindowMask .|. propertyChangeMask .|. structureNotifyMask
 
 -- The layouts.
-layoutHook :: _
 layoutHook =
-  avoidStruts
-    (toggleLayouts
-      -- Normal mode (82-column-wide window), with a border around the
-      -- currently-focused window if there's more than one window).
-      (smartBorders (FixedColumn 1 1 82 12 ||| Tall 1 (3/100) (1/2)))
-      -- Fullscreen mode, without wasting any pixels drawing a border.
-      (noBorders Full))
+  avoidStruts (toggleLayouts x1 x2)
+ where
+  x1 = smartBorders (y1 ||| y2 ||| y3)
+  y1 = FixedColumn 1 1 82 12
+  y2 = Tall 1 (3/100) (1/2)
+  y3 = XMonad.Layout.Mirror (Tall 1 (3/100) (8/10))
+
+  -- Fullscreen mode, without wasting any pixels drawing a border.
+  x2 = noBorders Full
 
 -- Our preferred terminal application.
-terminal :: String
-terminal =
-  "alacritty"
+terminal   = "alacritty" :: String
+terminalBS = "alacritty" :: ByteString
 
 keys :: XConfig l -> Map (KeyMask, KeySym) (X ())
-keys cfg = mkKeymap cfg myKeymap
+keys cfg =
+  mkKeymap cfg myKeymap
 
 -- The action to run when a new new window is created.
 manageHook :: Query (Endo WindowSet)
@@ -215,28 +230,19 @@ myKeymap =
 
   -- Mod-enter: spawn a terminal in the current directory.
   , ("M-<Return>", do
-      windowset :: WindowSet <- gets X.windowset
-      case XMonad.StackSet.peek windowset of
-        Nothing ->
-          safeSpawn terminal []
-
-        Just w ->
-          X.runQuery XMonad.Hooks.ManageHelpers.pid w >>= \case
-            Nothing ->
-              safeSpawn terminal []
-            Just pid -> do
-              lines <$> XMonad.Util.Run.runProcessWithInput "pgrep" ["-P", show pid] "" >>= \case
-                [child] -> do
-                  cwd <- liftIO (readSymbolicLink ("/proc/" ++ child ++ "/cwd"))
-                  safeSpawn terminal ["--working-directory", cwd]
-                _ -> do
-                  safeSpawn terminal [])
+      runMaybeT (do
+        pid     <- MaybeT currentWindowPid
+        True    <- isTerminal pid
+        [child] <- getChildrenPids pid
+        cwd     <- liftIO (readSymbolicLink ("/proc/" ++ child ++ "/cwd"))
+        safeSpawn terminal ["--working-directory", cwd])
+      >>= maybe (safeSpawn terminal []) pure)
 
   -- Mod-i: spawn a web browser.
   , ("M-i", safeSpawn "google-chrome-stable" [])
 
   -- Mod-p: spawn dmenu to run any program by name.
-  , ("M-p", safeSpawn "dmenu_run" [])
+  , ("M-p", safeSpawn "dmenu_run" ["-b", "-fn", "PragmataPro Mono-34"])
 
   -- Mod-c: kill the current window.
   , ("M-c", kill)
@@ -272,7 +278,6 @@ myKeymap =
   , ("M-S-k", windows swapUp)
 
   -- Mod-Alt-h and Mod-Alt-l: grow or shrink the master pane by a little bit.
-  -- This doesn't seem very useful for me since I only used fixed-width and
   -- fullscreen layouts.
   , ("M-M1-h", sendMessage Shrink)
   , ("M-M1-l", sendMessage Expand)
@@ -283,3 +288,31 @@ myKeymap =
   -- Mod-Shift-q: quit xmonad.
   , ("M-S-q", io (exitWith ExitSuccess))
   ]
+
+currentWindowPid :: X (Maybe ProcessID)
+currentWindowPid =
+  runMaybeT $ do
+    windowset :: WindowSet <-
+      gets X.windowset
+
+    window :: Window <-
+      (MaybeT ∘ pure ∘ XMonad.StackSet.peek) windowset
+
+    (MaybeT ∘ X.runQuery XMonad.Hooks.ManageHelpers.pid) window
+
+getChildrenPids :: MonadIO m => ProcessID -> m [String]
+getChildrenPids pid =
+  lines <$>
+    XMonad.Util.Run.runProcessWithInput "pgrep" ["-P", show pid] ""
+
+isTerminal :: MonadIO m => ProcessID -> m Bool
+isTerminal =
+  cmdlinePath⨾
+  ByteString.readFile⨾
+  δ (ByteString.takeWhile (/= 0))⨾
+  δ (== terminalBS)⨾
+  liftIO
+
+cmdlinePath :: ProcessID -> FilePath
+cmdlinePath pid =
+  "/proc/" ++ show pid ++ "/cmdline"
