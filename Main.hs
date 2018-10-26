@@ -295,6 +295,7 @@ myKeymap =
   , ("M-M1-k", sendMessage (Bloop 'k'))
 
   , ("M-M1-m", sendMessage (Bloop 'm'))
+  , ("M-M1-n", sendMessage (Bloop 'n'))
   , ("M-M1-0", sendMessage (Bloop '0'))
 
   -- Mod-Shift-r: restart xmonad
