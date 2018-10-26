@@ -123,9 +123,9 @@ layoutHook =
   -- Fullscreen mode, without wasting any pixels drawing a border.
   x1 = noBorders Full
 
-  x2 = y4 ||| y2
+  x2 = y1 ||| y2
+  y1 = mitchellLayout (7/10) (8/10) 8 8
   y2 = Tall 1 (3/100) (1/2)
-  y4 = MitchellLayout OneMaster SelectingMaster (7/10) (8/10) (11/10)
 
 -- Our preferred terminal application.
 terminal   = "alacritty" :: String
