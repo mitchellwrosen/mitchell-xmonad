@@ -11,7 +11,6 @@ module MitchellLayout
 import Bloop
 import Data.Foldable
 import Data.Int
-import Data.Word
 import Graphics.X11
 import Numeric.Natural
 import XMonad          (LayoutClass(..), X)
@@ -44,15 +43,16 @@ rr = 2/100
 
 data MitchellLayout a
   = MitchellLayout
-      NumMasters -- One or two masters?
-      Selecting  -- Selecting a master or slave?
-      Rational   -- X% the master pane(s) occupy
-      Rational   -- Y% the main master pane occupies, when there are two masters
-      Natural    -- Slave magnify multiplier
-      Natural    -- Master magnify multiplier
+      !NumMasters -- One or two masters?
+      !Selecting  -- Selecting a master or slave?
+      !Rational   -- X% the master pane(s) occupy
+      !Rational   -- Y% the main master pane occupies, when there are two masters
+      !Natural    -- Slave magnify multiplier
+      !Natural    -- Master magnify X multiplier
+      !Natural    -- Master magnify Y multiplier
   deriving (Read, Show)
 
-mitchellLayout :: Rational -> Rational -> Natural -> Natural -> MitchellLayout a
+mitchellLayout :: Rational -> Rational -> Natural -> Natural -> Natural -> MitchellLayout a
 mitchellLayout =
   MitchellLayout OneMaster SelectingMaster1
 
@@ -68,13 +68,14 @@ flipNumMasters TwoMasters = OneMaster
 data Selecting
   = SelectingMaster1
   | SelectingMaster2
-  | SelectingSlave
+  | SelectingSlave !Int
   deriving (Read, Show)
 
 selecting :: NumMasters -> Stack a -> Selecting
-selecting _ (Stack _ [] _)           = SelectingMaster1
-selecting TwoMasters (Stack _ [_] _) = SelectingMaster2
-selecting _ _                        = SelectingSlave
+selecting _ (Stack _ [] _)                = SelectingMaster1
+selecting OneMaster (Stack _ (_:xs) _)    = SelectingSlave (length xs)
+selecting TwoMasters (Stack _ [_] _)      = SelectingMaster2
+selecting TwoMasters (Stack _ (_:_:xs) _) = SelectingSlave (length xs)
 
 instance XMonad.LayoutClass MitchellLayout a where
   doLayout
@@ -82,57 +83,113 @@ instance XMonad.LayoutClass MitchellLayout a where
     -> Rectangle
     -> Stack a
     -> X ([(a, Rectangle)], Maybe (MitchellLayout a))
-  doLayout (MitchellLayout nm _ qx qy qs qm) rect stack =
+  doLayout (MitchellLayout nm _ qx qy qs qmx qmy) rect stack =
     pure
-      ( theLayout rect qx qy qs qm (stackLayout nm stack)
-      , Just (MitchellLayout nm (selecting nm stack) qx qy qs qm)
+      ( theLayout rect qx qy qs qmx qmy (stackLayout nm stack)
+      , Just (MitchellLayout nm (selecting nm stack) qx qy qs qmx qmy)
       )
 
-  pureMessage (MitchellLayout nm ss qx qy qs qm) msg =
+  pureMessage ll@(MitchellLayout nm ss qx qy qs qmx qmy) msg =
     asum
-      [ -- For handling expand/shrink, it depends whether we are selecting a
-        -- master (adjust master/slave ratio) or a slave a slave (adjust slave
-        -- magnification)
-        (let
-          selectingMaster = \case
-            XMonad.Expand -> MitchellLayout nm ss (max 0 (qx - rr)) qy qs qm
-            XMonad.Shrink -> MitchellLayout nm ss (min 1 (qx + rr)) qy qs qm
-         in
-          case ss of
-            SelectingMaster1 -> selectingMaster
-            SelectingMaster2 -> selectingMaster
-            SelectingSlave ->
-              \case
-                XMonad.Expand -> MitchellLayout nm ss qx qy (qs + 1) qm
-                XMonad.Shrink -> MitchellLayout nm ss qx qy (predNat qs) qm)
+      [ (\case
+            XMonad.Expand -> decreaseMasterSlaveRatio ll
+            XMonad.Shrink -> increaseMasterSlaveRatio ll)
         <$> XMonad.fromMessage msg
 
-        -- For handling j/k, it depends whether we are selecting master 1
-        -- (adjust master 1/2 ratio) or master 2 (adjust master 2 magnification)
-      , do
-          Bloop c <- XMonad.fromMessage msg
-          case c of
-            'k' ->
-              case ss of
-                SelectingMaster1 -> Just (MitchellLayout nm ss qx (max 0 (qy - rr)) qs qm)
-                SelectingMaster2 -> Just (MitchellLayout nm ss qx qy qs (qm + 1))
-                SelectingSlave   -> Nothing
+      , case XMonad.fromMessage msg of
+          Just (Bloop 'j') ->
+            Just (increaseMastersRatio ll)
 
-            'j' ->
-              case ss of
-                SelectingMaster1 -> Just (MitchellLayout nm ss qx (min 1 (qy + rr)) qs qm)
-                SelectingMaster2 -> Just (MitchellLayout nm ss qx qy qs (predNat qm))
-                SelectingSlave   -> Nothing
+          Just (Bloop 'k') ->
+            Just (decreaseMastersRatio ll)
 
-            'm' ->
-              Just (MitchellLayout (flipNumMasters nm) ss qx qy qs qm)
+          Just (Bloop 'H') ->
+            case ss of
+              SelectingMaster1 -> Nothing
+              SelectingMaster2 -> Just (increaseMasterZoomX ll)
+              SelectingSlave _ -> Just (decreaseSlaveZoom ll)
 
-            _ ->
-              Nothing
+          Just (Bloop 'J') ->
+            case ss of
+              SelectingMaster1 -> Nothing
+              SelectingMaster2 -> Just (decreaseMasterZoomY ll)
+              SelectingSlave _ -> Nothing
+
+          Just (Bloop 'K') ->
+            case ss of
+              SelectingMaster1 -> Nothing
+              SelectingMaster2 -> Just (increaseMasterZoomY ll)
+              SelectingSlave _ -> Nothing
+
+          Just (Bloop 'L') ->
+            case ss of
+              SelectingMaster1 -> Nothing
+              SelectingMaster2 -> Just (decreaseMasterZoomX ll)
+              SelectingSlave _ -> Just (increaseSlaveZoom ll)
+
+          Just (Bloop '0') ->
+            case ss of
+              SelectingMaster1 -> Nothing
+              SelectingMaster2 -> Just (resetMasterZoom ll)
+              SelectingSlave _ -> Just (resetSlaveZoom ll)
+
+          Just (Bloop 'm') ->
+            Just (MitchellLayout (flipNumMasters nm) ss qx qy qs qmx qmy)
+
+          _ ->
+            Nothing
       ]
 
   description _ =
     "Killer Tofu"
+
+decreaseMastersRatio :: MitchellLayout a -> MitchellLayout a
+decreaseMastersRatio (MitchellLayout nm ss qx qy qs qmx qmy) =
+  MitchellLayout nm ss qx (max 0 (qy - rr)) qs qmx qmy
+
+increaseMastersRatio :: MitchellLayout a -> MitchellLayout a
+increaseMastersRatio (MitchellLayout nm ss qx qy qs qmx qmy) =
+  MitchellLayout nm ss qx (min 1 (qy + rr)) qs qmx qmy
+
+increaseMasterZoomX :: MitchellLayout a -> MitchellLayout a
+increaseMasterZoomX (MitchellLayout nm ss qx qy qs qmx qmy) =
+  MitchellLayout nm ss qx qy qs (qmx + 1) qmy
+
+decreaseMasterZoomX :: MitchellLayout a -> MitchellLayout a
+decreaseMasterZoomX (MitchellLayout nm ss qx qy qs qmx qmy) =
+  MitchellLayout nm ss qx qy qs (predNat qmx) qmy
+
+increaseMasterZoomY :: MitchellLayout a -> MitchellLayout a
+increaseMasterZoomY (MitchellLayout nm ss qx qy qs qmx qmy) =
+  MitchellLayout nm ss qx qy qs qmx (qmy + 1)
+
+decreaseMasterZoomY :: MitchellLayout a -> MitchellLayout a
+decreaseMasterZoomY (MitchellLayout nm ss qx qy qs qmx qmy) =
+  MitchellLayout nm ss qx qy qs qmx (predNat qmy)
+
+resetMasterZoom :: MitchellLayout a -> MitchellLayout a
+resetMasterZoom (MitchellLayout nm ss qx qy qs _ _) =
+  MitchellLayout nm ss qx qy qs 0 0
+
+decreaseMasterSlaveRatio :: MitchellLayout a -> MitchellLayout a
+decreaseMasterSlaveRatio (MitchellLayout nm ss qx qy qs qmx qmy) =
+  MitchellLayout nm ss (max 0 (qx - rr)) qy qs qmx qmy
+
+increaseMasterSlaveRatio :: MitchellLayout a -> MitchellLayout a
+increaseMasterSlaveRatio (MitchellLayout nm ss qx qy qs qmx qmy) =
+  MitchellLayout nm ss (min 1 (qx + rr)) qy qs qmx qmy
+
+increaseSlaveZoom :: MitchellLayout a -> MitchellLayout a
+increaseSlaveZoom (MitchellLayout nm ss qx qy qs qmx qmy) =
+  MitchellLayout nm ss qx qy (qs + 1) qmx qmy
+
+decreaseSlaveZoom :: MitchellLayout a -> MitchellLayout a
+decreaseSlaveZoom (MitchellLayout nm ss qx qy qs qmx qmy) =
+  MitchellLayout nm ss qx qy (predNat qs) qmx qmy
+
+resetSlaveZoom :: MitchellLayout a -> MitchellLayout a
+resetSlaveZoom (MitchellLayout nm ss qx qy _ qmx qmy) =
+  MitchellLayout nm ss qx qy 0 qmx qmy
 
 -- The overall shape of the layout
 data TheLayout a
@@ -165,31 +222,44 @@ theLayout
   -> Rational
   -> Natural
   -> Natural
+  -> Natural
   -> TheLayout a
   -> [(a, Rectangle)]
-theLayout rect qx qy qs qm = \case
+theLayout rect qx qy qs qmx qmy = \case
   FocusingMaster1 master1 Nothing slaves ->
-    (master1, master1Rect rect qx 1) :
-      zip slaves (unfocusedSlaveRects rect qx (fromIntegral (length slaves)))
+    (master1, applyRectSpec (master1RectSpec qx 1) rect) :
+      zip
+        slaves
+        (map
+          (`applyRectSpec` rect)
+          (unfocusedSlaveRectSpecs qx (fromIntegral (length slaves))))
 
   FocusingMaster1 master1 (Just master2) slaves ->
-    (master1, master1Rect rect qx qy) :
-      (master2, master2Rect rect qx qy 0) :
-      zip slaves (unfocusedSlaveRects rect qx (fromIntegral (length slaves)))
+    (master1, applyRectSpec (master1RectSpec qx qy) rect) :
+      (master2, applyRectSpec (master2RectSpec qx qy qmx 0) rect) :
+      zip
+        slaves
+        (map
+          (`applyRectSpec` rect)
+          (unfocusedSlaveRectSpecs qx (fromIntegral (length slaves))))
 
   FocusingMaster2 master1 master2 slaves ->
-    (master2, master2Rect rect qx qy qm) :
-      (master1, master1Rect rect qx qy) :
-        zip slaves (unfocusedSlaveRects rect qx (fromIntegral (length slaves)))
+    (master2, applyRectSpec (master2RectSpec qx qy qmx qmy) rect) :
+      (master1, applyRectSpec (master1RectSpec qx qy) rect) :
+        zip
+          slaves
+          (map
+            (`applyRectSpec` rect)
+            (unfocusedSlaveRectSpecs qx (fromIntegral (length slaves))))
 
   FocusingSlave1 master1 (Stack slave slaveups slavedowns) ->
     xx : yy : zzs
    where
-    xx = (slave, focusedSlaveRect rect qx qs (nslaveups :/ nslaves))
-    yy = (master1, master1Rect rect qx 1)
+    xx = (slave, applyRectSpec (focusedSlaveRectSpec qx qs (nslaveups :/ nslaves)) rect)
+    yy = (master1, applyRectSpec (master1RectSpec qx 1) rect)
     zzs =
       map
-        (\(i, sl) -> (sl, unfocusedSlaveRect rect qx (i :/ nslaves)))
+        (\(i, sl) -> (sl, applyRectSpec (unfocusedSlaveRectSpec qx (i :/ nslaves)) rect))
         (zip [0..] (reverse slaveups) ++ zip [nslaveups+1 ..] slavedowns)
 
     nslaveups :: Int32
@@ -202,12 +272,12 @@ theLayout rect qx qy qs qm = \case
   FocusingSlave2 master1 master2 (Stack slave slaveups slavedowns) ->
     xx : yy : zz : zzs
    where
-    xx = (slave, focusedSlaveRect rect qx qs (nslaveups :/ nslaves))
-    yy = (master1, master1Rect rect qx qy)
-    zz = (master2, master2Rect rect qx qy 0)
+    xx = (slave, applyRectSpec (focusedSlaveRectSpec qx qs (nslaveups :/ nslaves)) rect)
+    yy = (master2, applyRectSpec (master2RectSpec qx qy 0 qmy) rect)
+    zz = (master1, applyRectSpec (master1RectSpec qx qy) rect)
     zzs =
       map
-        (\(i, sl) -> (sl, unfocusedSlaveRect rect qx (i :/ nslaves)))
+        (\(i, sl) -> (sl, applyRectSpec (unfocusedSlaveRectSpec qx (i :/ nslaves)) rect))
         (zip [0..] (reverse slaveups) ++ zip [nslaveups+1 ..] slavedowns)
 
     nslaveups :: Int32
@@ -217,52 +287,86 @@ theLayout rect qx qy qs qm = \case
     nslaves =
       nslaveups + 1 + fromIntegral (length slavedowns)
 
-master1Rect :: Rectangle -> Rational -> Rational -> Rectangle
-master1Rect (Rectangle x y w h) qx qy =
-  Rectangle
-    (x + fromIntegral (w - mw))
-    y
-    mw
-    (round (qy * fromIntegral h))
- where
-  mw :: Word32
-  mw = round (qx * fromIntegral w)
+-- Small helper type used to declaratively define a rectangle in terms of its
+-- bounding box (the whole screen). Initially, rectangles share the top left
+-- corner with the bounding box. Some examples:
+--
+-- AlignRight (Rect 0.2 1)          Rect 0.5 0.5
+--      +--------xx                  xxxxxx----+
+--      |        xx                  xxxxxx    |
+--      |        xx                  xxxxxx    |
+--      |        xx                  |         |
+--      +--------xx                  +---------+
+data RectSpec
+  = AlignRight RectSpec
+  | AlignBottom RectSpec
+  | TranslateY Rational RectSpec
+  | Rect Rational Rational -- % width, % height. Assumed to each be <= 1
 
-master2Rect :: Rectangle -> Rational -> Rational -> Natural -> Rectangle
-master2Rect (Rectangle x y w h) qx qy qm =
-  Rectangle
-    (x + fromIntegral (w - mw))
-    (y + round ((qy - fromIntegral qm * rr) * fromIntegral h))
-    mw
-    (round ((1 - (qy - fromIntegral qm * rr)) * fromIntegral h))
+applyRectSpec :: RectSpec -> Rectangle -> Rectangle
+applyRectSpec spec r@(Rectangle x y w h) =
+  case spec of
+    AlignRight spec' ->
+      let
+        Rectangle _ y' w' h' =
+          applyRectSpec spec' r
+      in
+        Rectangle (x + fromIntegral (w - w')) y' w' h'
+
+    AlignBottom spec' ->
+      let
+        Rectangle x' _ w' h' =
+          applyRectSpec spec' r
+      in
+        Rectangle x' (y + fromIntegral (h - h')) w' h'
+
+    TranslateY qy spec' ->
+      let
+        Rectangle x' y' w' h' =
+          applyRectSpec spec' r
+      in
+        Rectangle x' (y' + round (fromIntegral h * qy)) w' h'
+
+    Rect qw qh ->
+      Rectangle x y (round (fromIntegral w * qw)) (round (fromIntegral h * qh))
+
+master1RectSpec :: Rational -> Rational -> RectSpec
+master1RectSpec qx qy =
+  AlignRight (Rect qx qy)
+
+master2RectSpec
+  :: Rational
+  -> Rational
+  -> Natural
+  -> Natural
+  -> RectSpec
+master2RectSpec qx qy qmx qmy =
+  AlignRight (AlignBottom (Rect w h))
  where
-  mw :: Word32
-  mw = round (qx * fromIntegral w)
+  w = min 1 (qx + fromIntegral qmx * rr)
+  h = 1 - max 0 (qy - fromIntegral qmy * rr)
 
 data ℚ a
   = a :/ a
 
-unfocusedSlaveRect :: Rectangle -> Rational -> ℚ Int32 -> Rectangle
-unfocusedSlaveRect (Rectangle x y w h) q (i :/ n) =
-  Rectangle
-    x
-    (y + i * fromIntegral (div h (fromIntegral n)))
-    (round ((1-q) * fromIntegral w))
-    (div h (fromIntegral n))
+unfocusedSlaveRectSpec :: Rational -> ℚ Int32 -> RectSpec
+unfocusedSlaveRectSpec qx (i :/ n) =
+  TranslateY
+    (fromIntegral i / fromIntegral n)
+    (Rect (1-qx) (1 / fromIntegral n))
 
-unfocusedSlaveRects :: Rectangle -> Rational -> Int32 -> [Rectangle]
-unfocusedSlaveRects rect qx n =
-  map (\i -> unfocusedSlaveRect rect qx (i :/ n)) [0..n]
+unfocusedSlaveRectSpecs :: Rational -> Int32 -> [RectSpec]
+unfocusedSlaveRectSpecs qx n =
+  map (\i -> unfocusedSlaveRectSpec qx (i :/ n)) [0..n]
 
-focusedSlaveRect :: Rectangle -> Rational -> Natural -> ℚ Int32 -> Rectangle
-focusedSlaveRect (Rectangle x y w h) qx qs (i :/ n) =
-  Rectangle
-    x
-    (y + i * fromIntegral hh)
-    (round ((1 - qx + fromIntegral qs * rr) * fromIntegral w))
-    hh
+focusedSlaveRectSpec :: Rational -> Natural -> ℚ Int32 -> RectSpec
+focusedSlaveRectSpec qx qs (i :/ n) =
+  TranslateY
+    (fromIntegral i / fromIntegral n)
+    (Rect w h)
  where
-  hh = div h (fromIntegral n)
+  w = min 1 (1 - qx + fromIntegral qs * rr)
+  h = 1 / fromIntegral n
 
 stackLayout :: NumMasters -> Stack a -> TheLayout a
 stackLayout nmasters (Stack x ys zs) =

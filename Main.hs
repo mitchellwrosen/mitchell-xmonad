@@ -124,7 +124,7 @@ layoutHook =
   x1 = noBorders Full
 
   x2 = y1 ||| y2
-  y1 = mitchellLayout (7/10) (8/10) 8 8
+  y1 = mitchellLayout (7/10) (8/10) 0 0 0
   y2 = Tall 1 (3/100) (1/2)
 
 -- Our preferred terminal application.
@@ -286,9 +286,16 @@ myKeymap =
   , ("M-M1-h", sendMessage Shrink)
   , ("M-M1-l", sendMessage Expand)
 
+  , ("M-M1-S-h", sendMessage (Bloop 'H'))
+  , ("M-M1-S-j", sendMessage (Bloop 'J'))
+  , ("M-M1-S-k", sendMessage (Bloop 'K'))
+  , ("M-M1-S-l", sendMessage (Bloop 'L'))
+
   , ("M-M1-j", sendMessage (Bloop 'j'))
   , ("M-M1-k", sendMessage (Bloop 'k'))
+
   , ("M-M1-m", sendMessage (Bloop 'm'))
+  , ("M-M1-0", sendMessage (Bloop '0'))
 
   -- Mod-Shift-r: restart xmonad
   , ("M-S-r", restart "mitchell-xmonad" True)
