@@ -1,0 +1,1 @@
+-c "stack ghci" --restart mitchell-xmonad.cabal

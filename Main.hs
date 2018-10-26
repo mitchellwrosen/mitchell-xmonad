@@ -2,21 +2,23 @@
              RecordWildCards, ScopedTypeVariables #-}
 {-# OPTIONS_GHC -fno-warn-missing-signatures #-}
 
-import Control.Monad.IO.Class
-import Control.Monad.State
-import Control.Monad.Trans.Maybe
-import Data.Bits                 ((.|.))
-import Data.ByteString           (ByteString)
-import Data.Map                  (Map)
-import Data.Monoid               (All, Endo)
+import Bloop
 -- import Debug
-import FixedColumn                  (FixedColumn(FixedColumn))
+import MitchellLayout
+
+import Control.Monad.IO.Class       (MonadIO(..))
+import Control.Monad.State          (gets)
+import Control.Monad.Trans.Maybe    (MaybeT(..))
+import Data.Bits                    ((.|.))
+import Data.ByteString              (ByteString)
+import Data.Map                     (Map)
+import Data.Monoid                  (All, Endo)
 import Graphics.X11.Types           (enterWindowMask, propertyChangeMask,
                                      structureNotifyMask)
 import System.Exit                  (ExitCode(ExitSuccess), exitWith)
-import System.IO
+import System.IO                    (Handle, hPutStrLn)
 import System.Posix.Files           (readSymbolicLink)
-import System.Posix.Types
+import System.Posix.Types           (ProcessID)
 import XMonad                       (Button, ButtonMask,
                                      ChangeLayout(NextLayout), Event, EventMask,
                                      Full(Full), IncMasterN(IncMasterN),
@@ -35,8 +37,8 @@ import XMonad.Hooks.InsertPosition  (Focus(Newer), Position(Below),
 import XMonad.Hooks.ManageDocks     (avoidStruts, docksEventHook,
                                      docksStartupHook, manageDocks)
 import XMonad.Hooks.SetWMName       (setWMName)
-import XMonad.Layout.NoBorders
-import XMonad.Layout.ToggleLayouts
+import XMonad.Layout.NoBorders      (noBorders)
+import XMonad.Layout.ToggleLayouts  (ToggleLayout(ToggleLayout), toggleLayouts)
 import XMonad.Operations            (kill, restart, windows)
 import XMonad.StackSet              (focusDown, focusUp, sink, swapDown,
                                      swapMaster, swapUp)
@@ -48,7 +50,6 @@ import XMonad.Util.WorkspaceCompare (getSortByIndex)
 import qualified Data.ByteString            as ByteString
 import qualified XMonad                     as X
 import qualified XMonad.Hooks.ManageHelpers
-import qualified XMonad.Layout
 import qualified XMonad.StackSet
 import qualified XMonad.Util.Run
 
@@ -58,14 +59,19 @@ import qualified XMonad.Util.Run
 δ :: Functor f => (a -> b) -> (f a -> f b)
 δ = fmap
 
-δ² :: (Functor f, Functor g) => (a -> b) -> (f (g a)) -> (f (g b))
-δ² = fmap ∘ fmap
+-- δ² :: (Functor f, Functor g) => (a -> b) -> (f (g a)) -> (f (g b))
+-- δ² = fmap ∘ fmap
 
 -- Main entrypoint: spawn xmobar, then launch xmonad.
 main :: IO ()
 main = do
   xmobar :: Handle <-
     spawnPipe "xmobar /home/mitchell/.xmobarrc"
+
+  safeSpawn "xset" ["r", "rate", "160", "120"]
+  safeSpawn "xrdb" ["-merge", "~/.Xresources"]
+  safeSpawn "xmodmap" ["~/.Xmodmap"]
+  safeSpawn "xbindkeys" []
 
   launch XConfig
     { -- How many pixels wide should the border of the currently-selected
@@ -114,13 +120,12 @@ clientMask =
 layoutHook =
   avoidStruts (toggleLayouts x1 x2)
  where
-  x1 = smartBorders (y1 ||| y2 ||| y3)
-  y1 = FixedColumn 1 1 82 12
-  y2 = Tall 1 (3/100) (1/2)
-  y3 = XMonad.Layout.Mirror (Tall 1 (3/100) (8/10))
-
   -- Fullscreen mode, without wasting any pixels drawing a border.
-  x2 = noBorders Full
+  x1 = noBorders Full
+
+  x2 = y4 ||| y2
+  y2 = Tall 1 (3/100) (1/2)
+  y4 = MitchellLayout OneMaster SelectingMaster (7/10) (8/10) (11/10)
 
 -- Our preferred terminal application.
 terminal   = "alacritty" :: String
@@ -278,9 +283,12 @@ myKeymap =
   , ("M-S-k", windows swapUp)
 
   -- Mod-Alt-h and Mod-Alt-l: grow or shrink the master pane by a little bit.
-  -- fullscreen layouts.
   , ("M-M1-h", sendMessage Shrink)
   , ("M-M1-l", sendMessage Expand)
+
+  , ("M-M1-j", sendMessage (Bloop 'j'))
+  , ("M-M1-k", sendMessage (Bloop 'k'))
+  , ("M-M1-m", sendMessage (Bloop 'm'))
 
   -- Mod-Shift-r: restart xmonad
   , ("M-S-r", restart "mitchell-xmonad" True)
