@@ -1,0 +1,3 @@
+#!/bin/sh
+set -e
+ip link show up type wireguard | sed -n 's/.*\(wg.\).*/\1/p' | tr '\n' ' ' | head -c -1
