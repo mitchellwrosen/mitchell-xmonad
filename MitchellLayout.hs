@@ -3,6 +3,7 @@
 
 module MitchellLayout
   ( MitchellLayout
+  , MitchState(..)
   , mitchellLayout
   , NumMasters(..)
   , Selecting(..)
@@ -14,19 +15,18 @@ import Data.Int
 import Graphics.X11
 import Numeric.Natural
 import Text.Printf     (printf)
-import XMonad          (LayoutClass(..), X)
+import XMonad          (LayoutClass(..), Typeable, X)
 import XMonad.StackSet (Stack(Stack))
 
 import qualified XMonad
+import qualified XMonad.Util.ExtensibleState
 
 -- Mitchell's layout!
 --
 -- * Master pane occupies right 70%, even with no other windows
 -- * All slaves evenly split the left 30%
--- * When a slave is selected, it magnifies 10% (e.g. slave2 below)
--- * Two-master mode puts a second, smaller master beneath the first
--- * Main master's left/bottom border are adjustible
--- * Slave zoom is adjustible
+-- * Two-master mode puts a second, smaller master above or beneath the first
+-- * Slaves and second master can be zoomed when selected
 --
 -- +----------+---------------------------+
 -- |  slave1 ←|→ master 1                 |
@@ -52,11 +52,28 @@ data MitchellLayout a
       !Natural    -- Slave magnify multiplier
       !Natural    -- Master magnify X multiplier
       !Natural    -- Master magnify Y multiplier
+      !OnReset    -- Blob to use on reset
   deriving (Read, Show)
 
-mitchellLayout :: Rational -> Rational -> Natural -> Natural -> Natural -> MitchellLayout a
-mitchellLayout =
-  MitchellLayout OneMaster MasterAbove SelectingMaster1
+data OnReset
+  = OnReset
+      !Rational
+      !Rational
+      !Natural
+      !Natural
+      !Natural
+  deriving (Read, Show)
+
+mitchellLayout
+  :: Rational
+  -> Rational
+  -> Natural
+  -> Natural
+  -> Natural
+  -> MitchellLayout a
+mitchellLayout qx qy qs qmx qmy =
+  MitchellLayout OneMaster MasterAbove SelectingMaster1 qx qy qs qmx qmy
+    (OnReset qx qy qs qmx qmy)
 
 data NumMasters
   = OneMaster
@@ -89,19 +106,36 @@ selecting OneMaster (Stack _ (_:xs) _)    = SelectingSlave (length xs)
 selecting TwoMasters (Stack _ [_] _)      = SelectingMaster2
 selecting TwoMasters (Stack _ (_:_:xs) _) = SelectingSlave (length xs)
 
-instance XMonad.LayoutClass MitchellLayout a where
+data MitchState
+  = MitchStateDontSwapJK
+  | MitchStateDoSwapJK
+
+instance XMonad.ExtensionClass MitchState where
+  initialValue = MitchStateDontSwapJK
+
+mitchState :: MitchellLayout a -> MitchState
+mitchState = \case
+  MitchellLayout TwoMasters MasterBelow _ _ _ _ _ _ _ -> MitchStateDoSwapJK
+  _ -> MitchStateDontSwapJK
+
+instance Typeable a => XMonad.LayoutClass MitchellLayout a where
   doLayout
     :: MitchellLayout a
     -> Rectangle
     -> Stack a
     -> X ([(a, Rectangle)], Maybe (MitchellLayout a))
-  doLayout (MitchellLayout nm mode _ qx qy qs qmx qmy) rect stack =
-    pure
-      ( theLayout rect qx qy qs qmx qmy (stackLayout nm mode stack)
-      , Just (MitchellLayout nm mode (selecting nm stack) qx qy qs qmx qmy)
-      )
+  doLayout (MitchellLayout nm mode _ qx qy qs qmx qmy rs) rect stack =
+    let
+      layout' =
+        (MitchellLayout nm mode (selecting nm stack) qx qy qs qmx qmy rs)
+    in do
+      XMonad.Util.ExtensibleState.put (mitchState layout')
+      pure
+        ( theLayout rect qx qy qs qmx qmy (stackLayout nm mode stack)
+        , Just layout'
+        )
 
-  pureMessage ll@(MitchellLayout nm mode ss qx qy qs qmx qmy) msg =
+  pureMessage ll@(MitchellLayout nm mode ss qx qy qs qmx qmy rs) msg =
     asum
       [ (\case
             XMonad.Expand -> decreaseMasterSlaveRatio ll
@@ -150,73 +184,73 @@ instance XMonad.LayoutClass MitchellLayout a where
               SelectingSlave _ -> Just (increaseSlaveZoom ll)
 
           Just (Bloop '0') ->
-            case ss of
-              SelectingMaster1 -> Nothing
-              SelectingMaster2 -> Just (resetMasterZoom ll)
-              SelectingSlave _ -> Just (resetSlaveZoom ll)
+            Just (resetZooms ll)
 
           Just (Bloop 'm') ->
-            Just (MitchellLayout (flipNumMasters nm) mode ss qx qy qs qmx qmy)
+            Just (MitchellLayout (flipNumMasters nm) mode ss qx qy qs qmx qmy rs)
 
           Just (Bloop 'n') ->
-            Just (MitchellLayout nm (flipMasterMode mode) ss qx qy qs qmx qmy)
+            Just (MitchellLayout nm (flipMasterMode mode) ss qx qy qs qmx qmy rs)
 
           _ ->
             Nothing
+
+      , XMonad.fromMessage msg >>= \case
+          XMonad.ReleaseResources ->
+            Just (mitchellLayout qx qy qs qmx qmy)
+
+          XMonad.Hide ->
+            Nothing
       ]
 
-  description (MitchellLayout OneMaster _ _ qx _ _ _ _) =
+  description (MitchellLayout OneMaster _ _ qx _ _ _ _ _) =
     printf "Mitchell %d" (round (qx * 100) :: Int)
-  description (MitchellLayout TwoMasters _ _ qx qy _ _ _) =
+  description (MitchellLayout TwoMasters _ _ qx qy _ _ _ _) =
     printf "Mitchell %d %d" (round (qx * 100) :: Int) (round (qy * 100) :: Int)
 
 decreaseMastersRatio :: MitchellLayout a -> MitchellLayout a
-decreaseMastersRatio (MitchellLayout nm mode ss qx qy qs qmx qmy) =
-  MitchellLayout nm mode ss qx (max 0 (qy - rr)) qs qmx qmy
+decreaseMastersRatio (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
+  MitchellLayout nm mode ss qx (max 0 (qy - rr)) qs qmx qmy rs
 
 increaseMastersRatio :: MitchellLayout a -> MitchellLayout a
-increaseMastersRatio (MitchellLayout nm mode ss qx qy qs qmx qmy) =
-  MitchellLayout nm mode ss qx (min 1 (qy + rr)) qs qmx qmy
+increaseMastersRatio (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
+  MitchellLayout nm mode ss qx (min 1 (qy + rr)) qs qmx qmy rs
 
 increaseMasterZoomX :: MitchellLayout a -> MitchellLayout a
-increaseMasterZoomX (MitchellLayout nm mode ss qx qy qs qmx qmy) =
-  MitchellLayout nm mode ss qx qy qs (qmx + 1) qmy
+increaseMasterZoomX (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
+  MitchellLayout nm mode ss qx qy qs (qmx + 1) qmy rs
 
 decreaseMasterZoomX :: MitchellLayout a -> MitchellLayout a
-decreaseMasterZoomX (MitchellLayout nm mode ss qx qy qs qmx qmy) =
-  MitchellLayout nm mode ss qx qy qs (predNat qmx) qmy
+decreaseMasterZoomX (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
+  MitchellLayout nm mode ss qx qy qs (predNat qmx) qmy rs
 
 increaseMasterZoomY :: MitchellLayout a -> MitchellLayout a
-increaseMasterZoomY (MitchellLayout nm mode ss qx qy qs qmx qmy) =
-  MitchellLayout nm mode ss qx qy qs qmx (qmy + 1)
+increaseMasterZoomY (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
+  MitchellLayout nm mode ss qx qy qs qmx (qmy + 1) rs
 
 decreaseMasterZoomY :: MitchellLayout a -> MitchellLayout a
-decreaseMasterZoomY (MitchellLayout nm mode ss qx qy qs qmx qmy) =
-  MitchellLayout nm mode ss qx qy qs qmx (predNat qmy)
-
-resetMasterZoom :: MitchellLayout a -> MitchellLayout a
-resetMasterZoom (MitchellLayout nm mode ss qx qy qs _ _) =
-  MitchellLayout nm mode ss qx qy qs 0 0
+decreaseMasterZoomY (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
+  MitchellLayout nm mode ss qx qy qs qmx (predNat qmy) rs
 
 decreaseMasterSlaveRatio :: MitchellLayout a -> MitchellLayout a
-decreaseMasterSlaveRatio (MitchellLayout nm mode ss qx qy qs qmx qmy) =
-  MitchellLayout nm mode ss (max 0 (qx - rr)) qy qs qmx qmy
+decreaseMasterSlaveRatio (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
+  MitchellLayout nm mode ss (max 0 (qx - rr)) qy qs qmx qmy rs
 
 increaseMasterSlaveRatio :: MitchellLayout a -> MitchellLayout a
-increaseMasterSlaveRatio (MitchellLayout nm mode ss qx qy qs qmx qmy) =
-  MitchellLayout nm mode ss (min 1 (qx + rr)) qy qs qmx qmy
+increaseMasterSlaveRatio (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
+  MitchellLayout nm mode ss (min 1 (qx + rr)) qy qs qmx qmy rs
 
 increaseSlaveZoom :: MitchellLayout a -> MitchellLayout a
-increaseSlaveZoom (MitchellLayout nm mode ss qx qy qs qmx qmy) =
-  MitchellLayout nm mode ss qx qy (qs + 1) qmx qmy
+increaseSlaveZoom (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
+  MitchellLayout nm mode ss qx qy (qs + 1) qmx qmy rs
 
 decreaseSlaveZoom :: MitchellLayout a -> MitchellLayout a
-decreaseSlaveZoom (MitchellLayout nm mode ss qx qy qs qmx qmy) =
-  MitchellLayout nm mode ss qx qy (predNat qs) qmx qmy
+decreaseSlaveZoom (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
+  MitchellLayout nm mode ss qx qy (predNat qs) qmx qmy rs
 
-resetSlaveZoom :: MitchellLayout a -> MitchellLayout a
-resetSlaveZoom (MitchellLayout nm mode ss qx qy _ qmx qmy) =
-  MitchellLayout nm mode ss qx qy 0 qmx qmy
+resetZooms :: MitchellLayout a -> MitchellLayout a
+resetZooms (MitchellLayout nm mode ss qx qy _ _ _ rs) =
+  MitchellLayout nm mode ss qx qy 0 0 0 rs
 
 -- The overall shape of the layout
 data TheLayout a

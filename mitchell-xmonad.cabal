@@ -10,6 +10,7 @@ executable mitchell-xmonad
       base
     , bytestring
     , containers
+    , data-default-class
     , mtl
     , transformers
     , unix

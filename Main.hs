@@ -1,69 +1,63 @@
-{-# LANGUAGE LambdaCase, OverloadedStrings, PartialTypeSignatures,
-             RecordWildCards, ScopedTypeVariables #-}
+{-# LANGUAGE DeriveFunctor, DerivingStrategies, GeneralizedNewtypeDeriving,
+             LambdaCase, OverloadedStrings, PartialTypeSignatures,
+             PatternSynonyms, RankNTypes, RecordWildCards,
+             ScopedTypeVariables #-}
+{-# OPTIONS_GHC -fno-warn-missing-pattern-synonym-signatures #-}
 {-# OPTIONS_GHC -fno-warn-missing-signatures #-}
 
 import Bloop
 -- import Debug
 import MitchellLayout
 
-import Control.Applicative
-import Control.Monad.IO.Class       (MonadIO(..))
-import Control.Monad.State          (gets)
-import Control.Monad.Trans.Maybe    (MaybeT(..))
-import Data.Bits                    ((.|.))
-import Data.ByteString              (ByteString)
-import Data.Map                     (Map)
-import Data.Monoid                  (All, Endo)
-import Graphics.X11.Types           (enterWindowMask, propertyChangeMask,
-                                     structureNotifyMask)
-import System.Exit                  (ExitCode(ExitSuccess), exitWith)
-import System.IO                    (Handle, hPutStrLn)
-import System.Posix.Files           (createNamedPipe, namedPipeMode,
-                                     ownerReadMode, ownerWriteMode,
-                                     readSymbolicLink)
-import System.Posix.Types           (ProcessID)
-import XMonad                       (Button, ButtonMask,
-                                     ChangeLayout(NextLayout), Event, EventMask,
-                                     Full(Full), IncMasterN(IncMasterN),
-                                     KeyMask, KeySym, Layout, Query,
-                                     Resize(Expand, Shrink), Tall(Tall), Window,
-                                     WindowSet, WindowSpace, WorkspaceId, X,
-                                     XConfig(XConfig), def, io, launch,
-                                     mod4Mask, sendMessage, withFocused,
-                                     xC_top_left_arrow, (|||))
-import XMonad.Actions.CycleWS       (Direction1D(Next, Prev), WSType(AnyWS),
-                                     moveTo, shiftTo)
-import XMonad.Hooks.DynamicLog      (PP(..), dynamicLogWithPP, dzenEscape,
-                                     shorten, wrap, xmobarColor, xmobarStrip)
-import XMonad.Hooks.InsertPosition  (Focus(Newer), Position(Below),
-                                     insertPosition)
-import XMonad.Hooks.ManageDocks     (avoidStruts, docksEventHook,
-                                     docksStartupHook, manageDocks)
-import XMonad.Hooks.SetWMName       (setWMName)
-import XMonad.Layout.NoBorders      (noBorders)
-import XMonad.Layout.ToggleLayouts  (ToggleLayout(ToggleLayout), toggleLayouts)
-import XMonad.Operations            (kill, restart, windows)
-import XMonad.StackSet              (focusDown, focusUp, sink, swapDown,
-                                     swapMaster, swapUp)
-import XMonad.Util.Cursor           (setDefaultCursor)
-import XMonad.Util.EZConfig         (mkKeymap)
-import XMonad.Util.Run              (safeSpawn, spawnPipe)
-import XMonad.Util.WorkspaceCompare (getSortByIndex)
+import           Control.Applicative
+import           Control.Monad.Cont
+import           Control.Monad.IO.Class       (MonadIO(..))
+import           Control.Monad.State          (gets)
+import           Control.Monad.Trans.Maybe    (MaybeT(..))
+import           Data.Bits                    ((.|.))
+import           Data.ByteString              (ByteString)
+import           Data.Default.Class           (def)
+import           Data.Map                     (Map)
+import           Data.Monoid                  (All, Endo)
+import           Graphics.X11.Types           (enterWindowMask,
+                                               propertyChangeMask,
+                                               structureNotifyMask)
+import           System.Exit                  (ExitCode(ExitSuccess), exitWith)
+import           System.IO                    (Handle, hPutStrLn)
+import           System.Posix.Files           (createNamedPipe, namedPipeMode,
+                                               ownerReadMode, ownerWriteMode,
+                                               readSymbolicLink)
+import           System.Posix.Types           (ProcessID)
+import           XMonad                       (X, XConfig)
+import           XMonad.Actions.CycleWS       (Direction1D(Next, Prev),
+                                               WSType(AnyWS), moveTo, shiftTo)
+import           XMonad.Hooks.DynamicLog      (PP(..), dynamicLogWithPP,
+                                               dzenEscape, shorten, wrap,
+                                               xmobarColor, xmobarStrip)
+import           XMonad.Hooks.InsertPosition  (Focus(Newer), Position(Below),
+                                               insertPosition)
+import           XMonad.Hooks.ManageDocks     (avoidStruts, docksEventHook,
+                                               docksStartupHook, manageDocks)
+import           XMonad.Hooks.SetWMName       (setWMName)
+import           XMonad.Layout.NoBorders      (noBorders)
+import           XMonad.Layout.ToggleLayouts  (ToggleLayout(ToggleLayout),
+                                               toggleLayouts)
+import           XMonad.Operations            (kill, restart, windows)
+import           XMonad.StackSet              (focusDown, focusUp, sink,
+                                               swapDown, swapMaster, swapUp)
+import           XMonad.Util.Cursor           (setDefaultCursor)
+import qualified XMonad.Util.ExtensibleState
+import           XMonad.Util.EZConfig         (mkKeymap)
+import           XMonad.Util.Run              (safeSpawn, spawnPipe)
+import           XMonad.Util.WorkspaceCompare (getSortByIndex)
 
-import qualified Data.ByteString            as ByteString
+import qualified Data.ByteString as ByteString
+-- import qualified Data.Typeable              as Typeable
 import qualified XMonad                     as X
 import qualified XMonad.Hooks.ManageHelpers
-import qualified XMonad.StackSet
+import qualified XMonad.StackSet            as X (Stack)
+import qualified XMonad.StackSet            as X.Stack
 import qualified XMonad.Util.Run
-
-(∘) = (.)
-(⨾) = flip (.)
-
-δ :: Functor f => (a -> b) -> (f a -> f b)
-δ = fmap
-
--- δ² :: (Functor f, Functor g) => (a -> b) -> (f (g a)) -> (f (g b))
--- δ² = fmap ∘ fmap
 
 -- Main entrypoint: spawn xmobar, then launch xmonad.
 main :: IO ()
@@ -82,7 +76,7 @@ main = do
   safeSpawn "xmodmap" ["~/.Xmodmap"]
   safeSpawn "xbindkeys" []
 
-  launch XConfig
+  X.launch X.XConfig
     { -- How many pixels wide should the border of the currently-selected
       -- window be?
       X.borderWidth = 2
@@ -100,7 +94,7 @@ main = do
     , X.focusedBorderColor = "#3F607F"
 
       -- Rebind Mod to the Windows key.
-    , X.modMask = mod4Mask
+    , X.modMask = X.mod4Mask
 
       -- Unfocused window border color.
     , X.normalBorderColor = "#000000"
@@ -121,7 +115,7 @@ main = do
     }
 
 -- Which client events is XMonad interested in? (I use the default value).
-clientMask :: EventMask
+clientMask :: X.EventMask
 clientMask =
   enterWindowMask .|. propertyChangeMask .|. structureNotifyMask
 
@@ -130,22 +124,22 @@ layoutHook =
   avoidStruts (toggleLayouts x1 x2)
  where
   -- Fullscreen mode, without wasting any pixels drawing a border.
-  x1 = noBorders Full
+  x1 = noBorders X.Full
 
-  x2 = y1 ||| y2
+  x2 = y1 X.||| y2
   y1 = mitchellLayout (7/10) (8/10) 0 0 0
-  y2 = Tall 1 (3/100) (1/2)
+  y2 = X.Tall 1 (3/100) (1/2)
 
 -- Our preferred terminal application.
 terminal   = "alacritty" :: String
 terminalBS = "alacritty" :: ByteString
 
-keys :: XConfig l -> Map (KeyMask, KeySym) (X ())
+keys :: XConfig l -> Map (X.KeyMask, X.KeySym) (X ())
 keys cfg =
   mkKeymap cfg myKeymap
 
 -- The action to run when a new new window is created.
-manageHook :: Query (Endo WindowSet)
+manageHook :: X.Query (Endo X.WindowSet)
 manageHook = mconcat
   [ -- Don't manage DOCK-type programs like xmobar.
     manageDocks
@@ -158,12 +152,14 @@ manageHook = mconcat
   ]
 
 -- How to handle X events.
-handleEventHook :: Event -> X All
+handleEventHook :: X.Event -> X All
 handleEventHook event =
   -- Whenever a new dock appears, refresh the layout immediately.
   docksEventHook event
 
-mouseBindings :: XConfig Layout -> Map (ButtonMask, Button) (Window -> X ())
+mouseBindings
+  :: XConfig X.Layout
+  -> Map (X.ButtonMask, X.Button) (X.Window -> X ())
 mouseBindings =
   X.mouseBindings def
 
@@ -179,7 +175,7 @@ logHook xmobar = dynamicLogWithPP PP{..}
   ppHidden :: String -> String
   ppHidden = xmobarColor "orange" ""
 
-  ppHiddenNoWindows :: WorkspaceId -> String
+  ppHiddenNoWindows :: X.WorkspaceId -> String
   ppHiddenNoWindows = id
 
   ppLayout :: String -> String
@@ -194,7 +190,7 @@ logHook xmobar = dynamicLogWithPP PP{..}
   ppSep :: String
   ppSep = xmobarColor "orange" "" " | "
 
-  ppSort :: X ([WindowSpace] -> [WindowSpace])
+  ppSort :: X ([X.WindowSpace] -> [X.WindowSpace])
   ppSort = getSortByIndex
 
   ppTitle :: String -> String
@@ -212,7 +208,7 @@ logHook xmobar = dynamicLogWithPP PP{..}
   ppWsSep :: String
   ppWsSep = " "
 
-rootMask :: EventMask
+rootMask :: X.EventMask
 rootMask =
   X.rootMask def
 
@@ -224,7 +220,7 @@ startupHook = do
   setWMName "LG3D"
 
   -- Normal looking cursor, not ugly X
-  setDefaultCursor xC_top_left_arrow
+  setDefaultCursor X.xC_top_left_arrow
 
   -- Shrug, undocumented function in XMonad.Hooks.ManageDocks
   docksStartupHook
@@ -232,54 +228,59 @@ startupHook = do
 -- How should we handle extra command-line arguments? We don't pass any
 -- command-line arguments, so the default behavior is fine, which just blows up
 -- if there are any unrecognized arguments.
-handleExtraArgs :: [String] -> XConfig Layout -> IO (XConfig Layout)
+handleExtraArgs :: [String] -> XConfig X.Layout -> IO (XConfig X.Layout)
 handleExtraArgs =
   X.handleExtraArgs def
 
 myKeymap :: [(String, X ())]
 myKeymap =
   [ -- Mod-minus and Mod-plus: increase/decrease the amount of master windows.
-    ("M--", sendMessage (IncMasterN (-1)))
-  , ("M-=", sendMessage (IncMasterN 1))
+    -- ("M--", sendMessage (IncMasterN (-1)))
+  -- , ("M-=", sendMessage (IncMasterN 1))
 
   -- Mod-enter: spawn a terminal in the current directory.
-  , ("M-<Return>", do
-      runMaybeT (do
-        pid     <- MaybeT currentWindowPid
-        True    <- isTerminal pid
-        [child] <- getChildrenPids pid
-        cwd     <- liftIO (readSymbolicLink ("/proc/" ++ child ++ "/cwd"))
-        safeSpawn terminal ["--working-directory", cwd])
-      >>= maybe (safeSpawn terminal []) pure)
+    ("M-<Return>", spawnTerminalInCurrentDirectory)
 
   -- Mod-i: spawn a web browser.
   , ("M-i", safeSpawn "google-chrome-stable" [])
 
   -- Mod-p: spawn dmenu to run any program by name.
-  , ("M-p", safeSpawn "dmenu_run" ["-b", "-fn", "PragmataPro Mono-34"])
+  , ("M-p", safeSpawn "dmenu_run" ["-b", "-fn", "PragmataPro Mono-18"])
 
   -- Mod-c: kill the current window.
   , ("M-c", kill)
 
   -- Mod-f: toggle fullscreen.
-  , ("M-f", sendMessage ToggleLayout)
+  , ("M-f", X.sendMessage ToggleLayout)
 
   -- Mod-space: next layout
-  , ("M-<Space>", sendMessage NextLayout)
+  , ("M-<Space>", X.sendMessage X.NextLayout)
 
   -- Mod-h and Mod-l: move left and right through workspaces.
   , ("M-h", moveTo Prev AnyWS)
   , ("M-l", moveTo Next AnyWS)
 
   -- Mod-j and Mod-k: move up and down through windows in the current workspace.
-  , ("M-j", windows focusDown)
-  , ("M-k", windows focusUp)
+  -- In MitchellLayout with the second master above the first, we pretend the
+  -- master and second master have swapped positions in the stack, so j/k
+  -- movement feels more natural.
+  , ("M-j",
+      runKM
+        (handleModj
+          <$> getCurrentStack
+          <*> kX XMonad.Util.ExtensibleState.get))
+
+  , ("M-k", do
+      runKM
+        (handleModk
+          <$> getCurrentStack
+          <*> kX XMonad.Util.ExtensibleState.get))
 
   -- Mod-m: swap the currently-selected window with the master window.
   , ("M-m", windows swapMaster)
 
   -- Mod-t: snap a floating window back into place.
-  , ("M-t", withFocused (\w -> windows (sink w)))
+  , ("M-t", X.withFocused (sink⨾ windows))
 
   -- Mod-Shift-h and Mod-Shift-l: move left and right through workspaces,
   -- dragging the currently-selected window with us.
@@ -292,43 +293,96 @@ myKeymap =
   , ("M-S-k", windows swapUp)
 
   -- Mod-Alt-h and Mod-Alt-l: grow or shrink the master pane by a little bit.
-  , ("M-M1-h", sendMessage Shrink)
-  , ("M-M1-l", sendMessage Expand)
+  , ("M-M1-h", X.sendMessage X.Shrink)
+  , ("M-M1-l", X.sendMessage X.Expand)
 
-  , ("M-M1-S-h", sendMessage (Bloop 'H'))
-  , ("M-M1-S-j", sendMessage (Bloop 'J'))
-  , ("M-M1-S-k", sendMessage (Bloop 'K'))
-  , ("M-M1-S-l", sendMessage (Bloop 'L'))
+  , ("M-M1-S-h", X.sendMessage (Bloop 'H'))
+  , ("M-M1-S-j", X.sendMessage (Bloop 'J'))
+  , ("M-M1-S-k", X.sendMessage (Bloop 'K'))
+  , ("M-M1-S-l", X.sendMessage (Bloop 'L'))
 
-  , ("M-M1-j", sendMessage (Bloop 'j'))
-  , ("M-M1-k", sendMessage (Bloop 'k'))
+  , ("M-M1-j", X.sendMessage (Bloop 'j'))
+  , ("M-M1-k", X.sendMessage (Bloop 'k'))
 
-  , ("M-M1-m", sendMessage (Bloop 'm'))
-  , ("M-M1-n", sendMessage (Bloop 'n'))
-  , ("M-M1-0", sendMessage (Bloop '0'))
+  , ("M-M1-m", X.sendMessage (Bloop 'm'))
+  , ("M-M1-n", X.sendMessage (Bloop 'n'))
+  , ("M-M1-0", X.sendMessage (Bloop '0'))
 
   -- Mod-Shift-r: restart xmonad
   , ("M-S-r", restart "mitchell-xmonad" True)
 
   -- Mod-Shift-q: quit xmonad.
-  , ("M-S-q", io (exitWith ExitSuccess))
+  , ("M-S-q", liftIO (exitWith ExitSuccess))
   ]
+
+getCurrentStack :: K () (X.Stack X.Window)
+getCurrentStack =
+  (ContT⨾ K)
+    (\k ->
+      gets (X.windowset⨾ X.Stack.current⨾ X.Stack.workspace⨾ X.Stack.stack) >>=
+        maybe (pure ()) k)
+
+handleModj :: X.Stack X.Window -> MitchState -> X ()
+handleModj stack = \case
+  MitchStateDoSwapJK ->
+    case stack of
+      StackSelecting1of1 -> pure ()
+      StackSelecting1of2 -> windows focusDown
+      StackSelecting1ofN -> windows (focusDown ∘ focusDown)
+      StackSelecting2ofN -> windows focusUp
+      StackSelectingNofN -> windows (focusDown ∘ focusDown)
+      _                  -> windows focusDown
+
+  MitchStateDontSwapJK ->
+    windows focusDown
+
+handleModk :: X.Stack X.Window -> MitchState -> X ()
+handleModk stack = \case
+  MitchStateDoSwapJK ->
+    case stack of
+      StackSelecting1of1 -> pure ()
+      StackSelecting1ofN -> windows focusDown
+      StackSelecting2of2 -> windows focusDown
+      StackSelecting2ofN -> windows (focusUp ∘ focusUp)
+      StackSelecting3ofN -> windows (focusUp ∘ focusUp)
+      _                  -> windows focusUp
+
+  MitchStateDontSwapJK ->
+    windows focusUp
+
+pattern StackSelecting1of1 <- X.Stack.Stack _ []    []
+pattern StackSelecting1of2 <- X.Stack.Stack _ []    [_]
+pattern StackSelecting1ofN <- X.Stack.Stack _ []    _
+pattern StackSelecting2of2 <- X.Stack.Stack _ [_]   []
+pattern StackSelecting2ofN <- X.Stack.Stack _ [_]   _
+pattern StackSelecting3ofN <- X.Stack.Stack _ [_,_] _
+pattern StackSelectingNofN <- X.Stack.Stack _ _     []
+
+spawnTerminalInCurrentDirectory :: X ()
+spawnTerminalInCurrentDirectory =
+  runMaybeT (do
+    pid     <- MaybeT currentWindowPid
+    True    <- isTerminal pid
+    [child] <- getChildrenPids pid
+    cwd     <- liftIO (readSymbolicLink ("/proc/" ++ child ++ "/cwd"))
+    safeSpawn terminal ["--working-directory", cwd])
+  >>= maybe (safeSpawn terminal []) pure
 
 currentWindowPid :: X (Maybe ProcessID)
 currentWindowPid =
   runMaybeT $ do
-    windowset :: WindowSet <-
+    windowset :: X.WindowSet <-
       gets X.windowset
 
-    window :: Window <-
-      (MaybeT ∘ pure ∘ XMonad.StackSet.peek) windowset
+    window :: X.Window <-
+      (MaybeT ∘ pure ∘ X.Stack.peek) windowset
 
     (MaybeT ∘ X.runQuery XMonad.Hooks.ManageHelpers.pid) window
 
 getChildrenPids :: MonadIO m => ProcessID -> m [String]
 getChildrenPids pid =
-  lines <$>
-    XMonad.Util.Run.runProcessWithInput "pgrep" ["-P", show pid] ""
+  δ lines
+    (XMonad.Util.Run.runProcessWithInput "pgrep" ["-P", show pid] "")
 
 isTerminal :: MonadIO m => ProcessID -> m Bool
 isTerminal =
@@ -341,3 +395,39 @@ isTerminal =
 cmdlinePath :: ProcessID -> FilePath
 cmdlinePath pid =
   "/proc/" ++ show pid ++ "/cmdline"
+
+--------------------------------------------------------------------------------
+
+(∘) = (.)
+(⨾) = flip (.)
+
+δ :: Functor f => (a -> b) -> (f a -> f b)
+δ = fmap
+
+-- δ² :: (Functor f, Functor g) => (a -> b) -> (f (g a)) -> (f (g b))
+-- δ² = fmap ∘ fmap
+
+newtype K r a
+  = K (ContT r X a)
+  deriving stock (Functor)
+  deriving newtype (Applicative, Monad)
+
+runK :: K r r -> X r
+runK (K x) =
+  runContT x pure
+
+runKM :: K r (X r) -> X r
+runKM (K x) =
+  runContT x id
+
+kX :: X a -> K r a
+kX =
+  lift⨾ K
+
+-- instance Applicative K where
+--   pure x = K (pure x)
+--   K f <*> K x = K (f <*> x)
+
+-- instance Monad K where
+--   return = pure
+--   K x >>= f = K (x >>= f⨾ unK)

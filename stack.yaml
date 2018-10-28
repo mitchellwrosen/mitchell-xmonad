@@ -1,5 +1,8 @@
 resolver: lts-11.8
 
+packages:
+  - .
+
 extra-deps:
   - dbus-1.0.1
   - iwlib-0.1.0
