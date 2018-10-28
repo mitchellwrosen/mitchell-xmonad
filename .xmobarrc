@@ -68,12 +68,9 @@ Config { font         = "xft:PragmataPro Mono:pixelsize=14"
                         [ "-t", "<rx>↓<tx>↑" ]
                         10
 
-                    , Run ComX
-                        "showwg"
-                        [ ]
-                        "command not found: showwg"
+                    , Run PipeReader
+                        "/tmp/xmobar-wireguard.fifo"
                         "wg"
-                        600
 
                     , Run Battery
                         ["-t", "<left>%<leftipat> (<timeleft>)",

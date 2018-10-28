@@ -6,6 +6,7 @@ import Bloop
 -- import Debug
 import MitchellLayout
 
+import Control.Applicative
 import Control.Monad.IO.Class       (MonadIO(..))
 import Control.Monad.State          (gets)
 import Control.Monad.Trans.Maybe    (MaybeT(..))
@@ -17,7 +18,9 @@ import Graphics.X11.Types           (enterWindowMask, propertyChangeMask,
                                      structureNotifyMask)
 import System.Exit                  (ExitCode(ExitSuccess), exitWith)
 import System.IO                    (Handle, hPutStrLn)
-import System.Posix.Files           (readSymbolicLink)
+import System.Posix.Files           (createNamedPipe, namedPipeMode,
+                                     ownerReadMode, ownerWriteMode,
+                                     readSymbolicLink)
 import System.Posix.Types           (ProcessID)
 import XMonad                       (Button, ButtonMask,
                                      ChangeLayout(NextLayout), Event, EventMask,
@@ -65,6 +68,12 @@ import qualified XMonad.Util.Run
 -- Main entrypoint: spawn xmobar, then launch xmonad.
 main :: IO ()
 main = do
+  createNamedPipe
+    "/tmp/xmobar-wireguard.fifo"
+    (ownerReadMode .|. ownerWriteMode .|. namedPipeMode)
+    <|> pure ()
+  safeSpawn "wg-ping-xmobar-fifo" []
+
   xmobar :: Handle <-
     spawnPipe "xmobar /home/mitchell/.xmobarrc"
 
