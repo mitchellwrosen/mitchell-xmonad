@@ -5,12 +5,13 @@ cabal-version: >= 1.2
 
 executable mitchell-xmonad
   main-is: Main.hs
-  other-modules: Bloop, Debug, MitchellLayout
+  other-modules: Bloop, Debug, MitchellLayout, Utils
   build-depends:
       base
     , bytestring
     , containers
     , data-default-class
+    , lens
     , mtl
     , transformers
     , unix

@@ -1,31 +1,34 @@
 {-# LANGUAGE FlexibleInstances, InstanceSigs, LambdaCase, MultiParamTypeClasses,
-             ScopedTypeVariables #-}
+             ScopedTypeVariables, TemplateHaskell #-}
 
 module MitchellLayout
   ( MitchellLayout
-  , MitchState(..)
   , mitchellLayout
   , NumMasters(..)
   , Selecting(..)
+  , Zoom(..)
   ) where
 
 import Bloop
+import Utils
+
+import Control.Lens    hiding (Zoom)
+import Control.Lens.TH (makeLenses)
 import Data.Foldable
 import Data.Int
 import Graphics.X11
 import Numeric.Natural
 import Text.Printf     (printf)
-import XMonad          (LayoutClass(..), Typeable, X)
-import XMonad.StackSet (Stack(Stack))
+import XMonad          (Typeable, X)
 
-import qualified XMonad
-import qualified XMonad.Util.ExtensibleState
+import qualified XMonad          as X
+import qualified XMonad.StackSet as X (Stack(Stack))
 
 -- Mitchell's layout!
 --
 -- * Master pane occupies right 70%, even with no other windows
 -- * All slaves evenly split the left 30%
--- * Two-master mode puts a second, smaller master above or beneath the first
+-- * Two-master mode puts a second, smaller master beneath the first
 -- * Slaves and second master can be zoomed when selected
 --
 -- +----------+---------------------------+
@@ -42,38 +45,30 @@ import qualified XMonad.Util.ExtensibleState
 rr :: Rational
 rr = 2/100
 
-data MitchellLayout a
-  = MitchellLayout
-      !NumMasters -- One or two masters?
-      !MasterMode -- Main master above or below second master?
-      !Selecting  -- Selecting a master or slave?
-      !Rational   -- X% the master pane(s) occupy
-      !Rational   -- Y% the main master pane occupies when there are two masters
-      !Natural    -- Slave magnify multiplier
-      !Natural    -- Master magnify X multiplier
-      !Natural    -- Master magnify Y multiplier
-      !OnReset    -- Blob to use on reset
-  deriving (Read, Show)
-
 data OnReset
   = OnReset
       !Rational
       !Rational
       !Natural
-      !Natural
-      !Natural
+      !Zoom
   deriving (Read, Show)
 
 mitchellLayout
   :: Rational
   -> Rational
   -> Natural
-  -> Natural
-  -> Natural
+  -> Zoom
   -> MitchellLayout a
-mitchellLayout qx qy qs qmx qmy =
-  MitchellLayout OneMaster MasterAbove SelectingMaster1 qx qy qs qmx qmy
-    (OnReset qx qy qs qmx qmy)
+mitchellLayout qx qy qs qm =
+  MitchellLayout
+    { _layNumMasters = OneMaster
+    , _laySelecting = SelectingMaster1
+    , _layMasterX = qx
+    , _layMasterY = qy
+    , _laySlaveZ = qs
+    , _layMaster2Z = qm
+    , layOnReset = OnReset qx qy qs qm
+    }
 
 data NumMasters
   = OneMaster
@@ -84,173 +79,157 @@ flipNumMasters :: NumMasters -> NumMasters
 flipNumMasters OneMaster  = TwoMasters
 flipNumMasters TwoMasters = OneMaster
 
--- Main master relative to second master?
-data MasterMode
-  = MasterAbove
-  | MasterBelow
-  deriving (Read, Show)
-
-flipMasterMode :: MasterMode -> MasterMode
-flipMasterMode MasterAbove = MasterBelow
-flipMasterMode MasterBelow = MasterAbove
-
 data Selecting
   = SelectingMaster1
   | SelectingMaster2
   | SelectingSlave !Int
   deriving (Read, Show)
 
-selecting :: NumMasters -> Stack a -> Selecting
-selecting _ (Stack _ [] _)                = SelectingMaster1
-selecting OneMaster (Stack _ (_:xs) _)    = SelectingSlave (length xs)
-selecting TwoMasters (Stack _ [_] _)      = SelectingMaster2
-selecting TwoMasters (Stack _ (_:_:xs) _) = SelectingSlave (length xs)
+selecting :: NumMasters -> X.Stack a -> Selecting
+selecting _          (X.Stack _ []       _) = SelectingMaster1
+selecting OneMaster  (X.Stack _ (_:xs)   _) = SelectingSlave (length xs)
+selecting TwoMasters (X.Stack _ [_]      _) = SelectingMaster2
+selecting TwoMasters (X.Stack _ (_:_:xs) _) = SelectingSlave (length xs)
 
-data MitchState
-  = MitchStateDontSwapJK
-  | MitchStateDoSwapJK
+-- X multiplier, Y multiplier
+data Zoom
+  = Zoom
+  { _zoomX :: !Natural
+  , _zoomY :: !Natural
+  } deriving (Read, Show)
 
-instance XMonad.ExtensionClass MitchState where
-  initialValue = MitchStateDontSwapJK
+data MitchellLayout a
+  = MitchellLayout
+  { _layNumMasters :: !NumMasters -- One or two masters?
+  , _laySelecting  :: !Selecting  -- Selecting a master or slave?
+  , _layMasterX    :: !Rational   -- X% the master pane(s) occupy
+  , _layMasterY    :: !Rational   -- Y% the main master pane occupies when there are two masters
+  , _laySlaveZ     :: !Natural    -- Slave magnify multiplier
+  , _layMaster2Z   :: !Zoom       -- Second master zoom
+  , layOnReset     :: !OnReset    -- Blob to use on reset
+  } deriving (Read, Show)
 
-mitchState :: MitchellLayout a -> MitchState
-mitchState = \case
-  MitchellLayout TwoMasters MasterBelow _ _ _ _ _ _ _ -> MitchStateDoSwapJK
-  _ -> MitchStateDontSwapJK
+makeLenses ''MitchellLayout
+makeLenses ''Zoom
 
-instance Typeable a => XMonad.LayoutClass MitchellLayout a where
+instance Typeable a => X.LayoutClass MitchellLayout a where
   doLayout
     :: MitchellLayout a
     -> Rectangle
-    -> Stack a
+    -> X.Stack a
     -> X ([(a, Rectangle)], Maybe (MitchellLayout a))
-  doLayout (MitchellLayout nm mode _ qx qy qs qmx qmy rs) rect stack =
-    let
-      layout' =
-        (MitchellLayout nm mode (selecting nm stack) qx qy qs qmx qmy rs)
-    in do
-      XMonad.Util.ExtensibleState.put (mitchState layout')
-      pure
-        ( theLayout rect qx qy qs qmx qmy (stackLayout nm mode stack)
-        , Just layout'
-        )
+  doLayout lay@(MitchellLayout nm _ qx qy qs qm _) rect stack = do
+    pure
+      ( over (mapped . _2) (`applyRectSpec` rect)
+          (theLayout qx qy qs qm (stackLayout nm stack))
+      , Just (lay & laySelecting .~ selecting nm stack)
+      )
 
-  pureMessage ll@(MitchellLayout nm mode ss qx qy qs qmx qmy rs) msg =
+  pureMessage lay@(MitchellLayout _ ss qx qy qs qm _) msg =
     asum
       [ (\case
-            XMonad.Expand -> decreaseMasterSlaveRatio ll
-            XMonad.Shrink -> increaseMasterSlaveRatio ll)
-        <$> XMonad.fromMessage msg
+            X.Expand -> decreaseMasterSlaveRatio lay
+            X.Shrink -> increaseMasterSlaveRatio lay)
+        <$> X.fromMessage msg
 
-      , case XMonad.fromMessage msg of
+      , case X.fromMessage msg of
           Just (Bloop 'j') ->
-            case mode of
-              MasterAbove -> Just (increaseMastersRatio ll)
-              MasterBelow -> Just (decreaseMastersRatio ll)
+            Just (increaseMastersRatio lay)
 
           Just (Bloop 'k') ->
-            case mode of
-              MasterAbove -> Just (decreaseMastersRatio ll)
-              MasterBelow -> Just (increaseMastersRatio ll)
+            Just (decreaseMastersRatio lay)
 
           Just (Bloop 'H') ->
             case ss of
               SelectingMaster1 -> Nothing
-              SelectingMaster2 -> Just (increaseMasterZoomX ll)
-              SelectingSlave _ -> Just (decreaseSlaveZoom ll)
+              SelectingMaster2 -> Just (increaseMasterZoomX lay)
+              SelectingSlave _ -> Just (decreaseSlaveZoom lay)
 
           Just (Bloop 'J') ->
             case ss of
               SelectingMaster1 -> Nothing
-              SelectingMaster2 ->
-                case mode of
-                  MasterAbove -> Just (decreaseMasterZoomY ll)
-                  MasterBelow -> Just (increaseMasterZoomY ll)
+              SelectingMaster2 -> Just (decreaseMasterZoomY lay)
               SelectingSlave _ -> Nothing
 
           Just (Bloop 'K') ->
             case ss of
               SelectingMaster1 -> Nothing
-              SelectingMaster2 ->
-                case mode of
-                  MasterAbove -> Just (increaseMasterZoomY ll)
-                  MasterBelow -> Just (decreaseMasterZoomY ll)
+              SelectingMaster2 -> Just (increaseMasterZoomY lay)
               SelectingSlave _ -> Nothing
 
           Just (Bloop 'L') ->
             case ss of
               SelectingMaster1 -> Nothing
-              SelectingMaster2 -> Just (decreaseMasterZoomX ll)
-              SelectingSlave _ -> Just (increaseSlaveZoom ll)
+              SelectingMaster2 -> Just (decreaseMasterZoomX lay)
+              SelectingSlave _ -> Just (increaseSlaveZoom lay)
 
           Just (Bloop '0') ->
-            Just (resetZooms ll)
+            Just (resetZooms lay)
 
           Just (Bloop 'm') ->
-            Just (MitchellLayout (flipNumMasters nm) mode ss qx qy qs qmx qmy rs)
-
-          Just (Bloop 'n') ->
-            Just (MitchellLayout nm (flipMasterMode mode) ss qx qy qs qmx qmy rs)
+            Just (lay & layNumMasters %~ flipNumMasters)
 
           _ ->
             Nothing
 
-      , XMonad.fromMessage msg >>= \case
-          XMonad.ReleaseResources ->
-            Just (mitchellLayout qx qy qs qmx qmy)
+      , X.fromMessage msg >>= \case
+          X.ReleaseResources ->
+            Just (mitchellLayout qx qy qs qm)
 
-          XMonad.Hide ->
+          X.Hide ->
             Nothing
       ]
 
-  description (MitchellLayout OneMaster _ _ qx _ _ _ _ _) =
+  description (MitchellLayout OneMaster _ qx _ _ _ _) =
     printf "Mitchell %d" (round (qx * 100) :: Int)
-  description (MitchellLayout TwoMasters _ _ qx qy _ _ _ _) =
+  description (MitchellLayout TwoMasters _ qx qy _ _ _) =
     printf "Mitchell %d %d" (round (qx * 100) :: Int) (round (qy * 100) :: Int)
 
 decreaseMastersRatio :: MitchellLayout a -> MitchellLayout a
-decreaseMastersRatio (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
-  MitchellLayout nm mode ss qx (max 0 (qy - rr)) qs qmx qmy rs
+decreaseMastersRatio =
+  over layMasterY (\qy -> max 0 (qy - rr))
 
 increaseMastersRatio :: MitchellLayout a -> MitchellLayout a
-increaseMastersRatio (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
-  MitchellLayout nm mode ss qx (min 1 (qy + rr)) qs qmx qmy rs
+increaseMastersRatio =
+  over layMasterY (\qy -> min 1 (qy + rr))
 
 increaseMasterZoomX :: MitchellLayout a -> MitchellLayout a
-increaseMasterZoomX (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
-  MitchellLayout nm mode ss qx qy qs (qmx + 1) qmy rs
+increaseMasterZoomX =
+  over (layMaster2Z . zoomX) (+1)
 
 decreaseMasterZoomX :: MitchellLayout a -> MitchellLayout a
-decreaseMasterZoomX (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
-  MitchellLayout nm mode ss qx qy qs (predNat qmx) qmy rs
+decreaseMasterZoomX =
+  over (layMaster2Z . zoomX) predNat
 
 increaseMasterZoomY :: MitchellLayout a -> MitchellLayout a
-increaseMasterZoomY (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
-  MitchellLayout nm mode ss qx qy qs qmx (qmy + 1) rs
+increaseMasterZoomY =
+  over (layMaster2Z . zoomY) (+1)
 
 decreaseMasterZoomY :: MitchellLayout a -> MitchellLayout a
-decreaseMasterZoomY (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
-  MitchellLayout nm mode ss qx qy qs qmx (predNat qmy) rs
+decreaseMasterZoomY =
+  over (layMaster2Z . zoomY) predNat
 
 decreaseMasterSlaveRatio :: MitchellLayout a -> MitchellLayout a
-decreaseMasterSlaveRatio (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
-  MitchellLayout nm mode ss (max 0 (qx - rr)) qy qs qmx qmy rs
+decreaseMasterSlaveRatio =
+  over layMasterX (\qx -> max 0 (qx - rr))
 
 increaseMasterSlaveRatio :: MitchellLayout a -> MitchellLayout a
-increaseMasterSlaveRatio (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
-  MitchellLayout nm mode ss (min 1 (qx + rr)) qy qs qmx qmy rs
+increaseMasterSlaveRatio =
+  over layMasterX (\qx -> min 1 (qx + rr))
 
 increaseSlaveZoom :: MitchellLayout a -> MitchellLayout a
-increaseSlaveZoom (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
-  MitchellLayout nm mode ss qx qy (qs + 1) qmx qmy rs
+increaseSlaveZoom =
+  over laySlaveZ (+1)
 
 decreaseSlaveZoom :: MitchellLayout a -> MitchellLayout a
-decreaseSlaveZoom (MitchellLayout nm mode ss qx qy qs qmx qmy rs) =
-  MitchellLayout nm mode ss qx qy (predNat qs) qmx qmy rs
+decreaseSlaveZoom =
+  over laySlaveZ predNat
 
 resetZooms :: MitchellLayout a -> MitchellLayout a
-resetZooms (MitchellLayout nm mode ss qx qy _ _ _ rs) =
-  MitchellLayout nm mode ss qx qy 0 0 0 rs
+resetZooms lay =
+  lay
+    & laySlaveZ .~ 0
+    & layMaster2Z .~ Zoom 0 0
 
 -- The overall shape of the layout
 data TheLayout a
@@ -260,60 +239,58 @@ data TheLayout a
                     --   ^ slaves
 
   -- Focused on master 1, with a master 2 and 0+ slaves
-  | FocusingMaster1of2 MasterMode a a [a]
-                               -- ^ master 1
-                               --   ^ master 2
-                               --     ^ slaves
+  | FocusingMaster1of2 a a [a]
+                    -- ^ master 1
+                    --   ^ master 2
+                    --     ^ slaves
 
   -- Focused on master 2, with 0+ slaves
-  | FocusingMaster2 MasterMode a a [a]
-                            -- ^ master 1
-                            --   ^ master 2
-                            --     ^ slaves
+  | FocusingMaster2 a a [a]
+                 -- ^ master 1
+                 --   ^ master 2
+                 --     ^ slaves
 
   -- Focused on a slave, with one master
-  | FocusingSlave1 a (Stack a)
-                -- ^ master
-                --   ^ slaves (with focus)
+  | FocusingSlaveWith1Master a (X.Stack a)
+                          -- ^ master
+                          --   ^ slaves (with focus)
 
   -- Focused on a slave, with two masters
-  | FocusingSlave2 MasterMode a a (Stack a)
+  | FocusingSlaveWith2Masters a a (X.Stack a)
                            -- ^ master 1
-                           --   ^ master 2
-                           --     ^ slaves (with focus)
+                          --   ^ master 2
+                          --     ^ slaves (with focus)
 
 theLayout
-  :: Rectangle
+  :: Rational
   -> Rational
-  -> Rational
   -> Natural
-  -> Natural
-  -> Natural
+  -> Zoom
   -> TheLayout a
-  -> [(a, Rectangle)]
-theLayout rect qx qy qs qmx qmy = \case
+  -> [(a, RectSpec)]
+theLayout qx qy qs (Zoom qmx qmy) = \case
   FocusingMaster1of1 master1 slaves ->
-    (master1, applyRectSpec (master1RectSpec qx 1 MasterAbove) rect) :
-      unfocusedSlaveRects slaves
+    (master1, master1Rect qx 1) :
+    unfocusedSlaveRects' slaves
 
-  FocusingMaster1of2 mode master1 master2 slaves ->
-    (master1, applyRectSpec (master1RectSpec qx qy mode) rect) :
-      (master2, applyRectSpec (master2RectSpec qx qy qmx 0 mode) rect) :
-        unfocusedSlaveRects slaves
+  FocusingMaster1of2 master1 master2 slaves ->
+    (master1, master1Rect qx qy) :
+    (master2, master2Rect qx qy (Zoom qmx 0)) :
+    unfocusedSlaveRects' slaves
 
-  FocusingMaster2 mode master1 master2 slaves ->
-    (master2, applyRectSpec (master2RectSpec qx qy qmx qmy mode) rect) :
-      (master1, applyRectSpec (master1RectSpec qx qy mode) rect) :
-        unfocusedSlaveRects slaves
+  FocusingMaster2 master1 master2 slaves ->
+    (master2, master2Rect qx qy (Zoom qmx qmy)) :
+    (master1, master1Rect qx qy) :
+    unfocusedSlaveRects' slaves
 
-  FocusingSlave1 master1 (Stack slave slaveups slavedowns) ->
+  FocusingSlaveWith1Master master1 (X.Stack slave slaveups slavedowns) ->
     xx : yy : zzs
    where
-    xx = (slave, applyRectSpec (focusedSlaveRectSpec qx qs (nslaveups :/ nslaves)) rect)
-    yy = (master1, applyRectSpec (master1RectSpec qx 1 MasterAbove) rect)
+    xx = (slave, focusedSlaveRect qx qs (nslaveups :/ nslaves))
+    yy = (master1, master1Rect qx 1)
     zzs =
       map
-        (\(i, sl) -> (sl, applyRectSpec (unfocusedSlaveRectSpec qx (i :/ nslaves)) rect))
+        (\(i, sl) -> (sl, unfocusedSlaveRect qx (i :/ nslaves)))
         (zip [0..] (reverse slaveups) ++ zip [nslaveups+1 ..] slavedowns)
 
     nslaveups :: Int32
@@ -323,23 +300,22 @@ theLayout rect qx qy qs qmx qmy = \case
     nslaves =
       nslaveups + 1 + fromIntegral (length slavedowns)
 
-  FocusingSlave2 mode master1 master2 (Stack slave slaveups slavedowns) ->
+  FocusingSlaveWith2Masters master1 master2 (X.Stack slave slaveups slavedowns) ->
     xx : yy : zz : zzs
    where
     xx = (slave, xxrect)
-    xxrect = applyRectSpec (focusedSlaveRectSpec qx qs (nslaveups :/ nslaves)) rect
+    xxrect = focusedSlaveRect qx qs (nslaveups :/ nslaves)
+    -- yy = (master2, master2Rect qx qy (Zoom 0 0))
     yy =
       ( master2
-      , if overlapsY xxrect yyrect1
-          then yyrect2
-          else yyrect1
+      , IfOverlapsY yyrect1 xxrect yyrect2
       )
-    yyrect1 = applyRectSpec (master2RectSpec qx qy qmx qmy mode) rect
-    yyrect2 = applyRectSpec (master2RectSpec qx qy 0 qmy mode) rect
-    zz = (master1, applyRectSpec (master1RectSpec qx qy mode) rect)
+    yyrect1 = master2Rect qx qy (Zoom qmx qmy)
+    yyrect2 = master2Rect qx qy (Zoom 0 qmy)
+    zz = (master1, master1Rect qx qy)
     zzs =
       map
-        (\(i, sl) -> (sl, applyRectSpec (unfocusedSlaveRectSpec qx (i :/ nslaves)) rect))
+        (\(i, sl) -> (sl, unfocusedSlaveRect qx (i :/ nslaves)))
         (zip [0..] (reverse slaveups) ++ zip [nslaveups+1 ..] slavedowns)
 
     nslaveups :: Int32
@@ -350,12 +326,10 @@ theLayout rect qx qy qs qmx qmy = \case
       nslaveups + 1 + fromIntegral (length slavedowns)
 
  where
-  unfocusedSlaveRects slaves =
+  unfocusedSlaveRects' slaves =
     zip
       slaves
-      (map
-        (`applyRectSpec` rect)
-        (unfocusedSlaveRectSpecs qx (fromIntegral (length slaves))))
+      (unfocusedSlaveRects qx (fromIntegral (length slaves)))
 
 overlapsY :: Rectangle -> Rectangle -> Bool
 overlapsY (Rectangle _ y1 _ h1) (Rectangle _ y2 _ h2)
@@ -373,9 +347,10 @@ overlapsY (Rectangle _ y1 _ h1) (Rectangle _ y2 _ h2)
 --      |        xx                  |         |
 --      +--------xx                  +---------+
 data RectSpec
-  = AlignRight RectSpec
-  | AlignBottom RectSpec
-  | TranslateY Rational RectSpec
+  = AlignRight !RectSpec
+  | AlignBottom !RectSpec
+  | TranslateY !Rational !RectSpec
+  | IfOverlapsY !RectSpec !RectSpec !RectSpec
   | Rect Rational Rational -- % width, % height. Assumed to each be <= 1
 
 applyRectSpec :: RectSpec -> Rectangle -> Rectangle
@@ -402,46 +377,49 @@ applyRectSpec spec r@(Rectangle x y w h) =
       in
         Rectangle x' (y' + round (fromIntegral h * qy)) w' h'
 
+    IfOverlapsY r1 r2 rt ->
+      let
+        r1' = applyRectSpec r1 r
+        r2' = applyRectSpec r2 r
+        rt' = applyRectSpec rt r
+      in
+        if overlapsY r1' r2'
+          then rt'
+          else r1'
+
     Rect qw qh ->
       Rectangle x y (round (fromIntegral w * qw)) (round (fromIntegral h * qh))
 
-master1RectSpec :: Rational -> Rational -> MasterMode -> RectSpec
-master1RectSpec qx qy = \case
-  MasterAbove -> rect
-  MasterBelow -> AlignBottom rect
- where
-  rect = AlignRight (Rect qx qy)
+master1Rect :: Rational -> Rational -> RectSpec
+master1Rect qx qy =
+  AlignRight (Rect qx qy)
 
-master2RectSpec
+master2Rect
   :: Rational
   -> Rational
-  -> Natural
-  -> Natural
-  -> MasterMode
+  -> Zoom
   -> RectSpec
-master2RectSpec qx qy qmx qmy = \case
-  MasterAbove -> AlignBottom rect
-  MasterBelow -> rect
+master2Rect qx qy (Zoom qmx qmy) =
+  AlignBottom (AlignRight (Rect w h))
  where
-  rect = AlignRight (Rect w h)
   w = min 1 (qx + fromIntegral qmx * rr)
   h = 1 - max 0 (qy - fromIntegral qmy * rr)
 
 data ℚ a
   = a :/ a
 
-unfocusedSlaveRectSpec :: Rational -> ℚ Int32 -> RectSpec
-unfocusedSlaveRectSpec qx (i :/ n) =
+unfocusedSlaveRect :: Rational -> ℚ Int32 -> RectSpec
+unfocusedSlaveRect qx (i :/ n) =
   TranslateY
     (fromIntegral i / fromIntegral n)
     (Rect (1-qx) (1 / fromIntegral n))
 
-unfocusedSlaveRectSpecs :: Rational -> Int32 -> [RectSpec]
-unfocusedSlaveRectSpecs qx n =
-  map (\i -> unfocusedSlaveRectSpec qx (i :/ n)) [0..n]
+unfocusedSlaveRects :: Rational -> Int32 -> [RectSpec]
+unfocusedSlaveRects qx n =
+  map (\i -> unfocusedSlaveRect qx (i :/ n)) [0..n]
 
-focusedSlaveRectSpec :: Rational -> Natural -> ℚ Int32 -> RectSpec
-focusedSlaveRectSpec qx qs (i :/ n) =
+focusedSlaveRect :: Rational -> Natural -> ℚ Int32 -> RectSpec
+focusedSlaveRect qx qs (i :/ n) =
   TranslateY
     (fromIntegral i / fromIntegral n)
     (Rect w h)
@@ -449,54 +427,30 @@ focusedSlaveRectSpec qx qs (i :/ n) =
   w = min 1 (1 - qx + fromIntegral qs * rr)
   h = 1 / fromIntegral n
 
-stackLayout :: NumMasters -> MasterMode -> Stack a -> TheLayout a
-stackLayout nmasters mode (Stack x ys zs) =
-  case nmasters of
-    OneMaster ->
-      case unsnoc1 ys of
-        Unsnoc1_0       -> FocusingMaster1of1 x zs
-        Unsnoc1_1 ys' y -> FocusingSlave1 y (Stack x ys' zs)
+stackLayout :: NumMasters -> X.Stack a -> TheLayout a
+stackLayout = \case
+  OneMaster  -> stackLayoutOneMaster
+  TwoMasters -> stackLayoutTwoMasters
 
-    TwoMasters ->
-      case unsnoc2 ys of
-        Unsnoc2_0 ->
-          case zs of
-            []    -> FocusingMaster1of1 x []
-            z:zs' -> FocusingMaster1of2 mode x z zs'
+stackLayoutOneMaster :: X.Stack a -> TheLayout a
+stackLayoutOneMaster (X.Stack x ys zs) =
+  case unsnoc1 ys of
+    Unsnoc1_0       -> FocusingMaster1of1 x zs
+    Unsnoc1_1 ys' y -> FocusingSlaveWith1Master y (X.Stack x ys' zs)
 
-        Unsnoc2_1 y ->
-          FocusingMaster2 mode y x zs
+stackLayoutTwoMasters :: X.Stack a -> TheLayout a
+stackLayoutTwoMasters (X.Stack x ys zs) =
+  case unsnoc2 ys of
+    Unsnoc2_0 ->
+      case zs of
+        []    -> FocusingMaster1of1 x []
+        z:zs' -> FocusingMaster1of2 x z zs'
 
-        Unsnoc2_2 ys' y z ->
-          FocusingSlave2 mode z y (Stack x ys' zs)
+    Unsnoc2_1 y ->
+      FocusingMaster2 y x zs
 
-data Unsnoc1 a
-  = Unsnoc1_0
-  | Unsnoc1_1 [a] a
-
-unsnoc1 :: [a] -> Unsnoc1 a
-unsnoc1 =
-  foldr step Unsnoc1_0
- where
-  step :: a -> Unsnoc1 a -> Unsnoc1 a
-  step x = \case
-    Unsnoc1_0 -> Unsnoc1_1 [] x
-    Unsnoc1_1 xs y -> Unsnoc1_1 (x:xs) y
-
-data Unsnoc2 a
-  = Unsnoc2_0
-  | Unsnoc2_1 a
-  | Unsnoc2_2 [a] a a
-
-unsnoc2 :: [a] -> Unsnoc2 a
-unsnoc2 =
-  foldr step Unsnoc2_0
- where
-  step :: a -> Unsnoc2 a -> Unsnoc2 a
-  step x = \case
-    Unsnoc2_0 -> Unsnoc2_1 x
-    Unsnoc2_1 y -> Unsnoc2_2 [] x y
-    Unsnoc2_2 xs y z -> Unsnoc2_2 (x:xs) y z
+    Unsnoc2_2 ys' y z ->
+      FocusingSlaveWith2Masters z y (X.Stack x ys' zs)
 
 predNat :: Natural -> Natural
 predNat 0 = 0

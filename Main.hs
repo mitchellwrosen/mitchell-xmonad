@@ -9,53 +9,48 @@ import Bloop
 -- import Debug
 import MitchellLayout
 
-import           Control.Applicative
-import           Control.Monad.Cont
-import           Control.Monad.IO.Class       (MonadIO(..))
-import           Control.Monad.State          (gets)
-import           Control.Monad.Trans.Maybe    (MaybeT(..))
-import           Data.Bits                    ((.|.))
-import           Data.ByteString              (ByteString)
-import           Data.Default.Class           (def)
-import           Data.Map                     (Map)
-import           Data.Monoid                  (All, Endo)
-import           Graphics.X11.Types           (enterWindowMask,
-                                               propertyChangeMask,
-                                               structureNotifyMask)
-import           System.Exit                  (ExitCode(ExitSuccess), exitWith)
-import           System.IO                    (Handle, hPutStrLn)
-import           System.Posix.Files           (createNamedPipe, namedPipeMode,
-                                               ownerReadMode, ownerWriteMode,
-                                               readSymbolicLink)
-import           System.Posix.Types           (ProcessID)
-import           XMonad                       (X, XConfig)
-import           XMonad.Actions.CycleWS       (Direction1D(Next, Prev),
-                                               WSType(AnyWS), moveTo, shiftTo)
-import           XMonad.Hooks.DynamicLog      (PP(..), dynamicLogWithPP,
-                                               dzenEscape, shorten, wrap,
-                                               xmobarColor, xmobarStrip)
-import           XMonad.Hooks.InsertPosition  (Focus(Newer), Position(Below),
-                                               insertPosition)
-import           XMonad.Hooks.ManageDocks     (avoidStruts, docksEventHook,
-                                               docksStartupHook, manageDocks)
-import           XMonad.Hooks.SetWMName       (setWMName)
-import           XMonad.Layout.NoBorders      (noBorders)
-import           XMonad.Layout.ToggleLayouts  (ToggleLayout(ToggleLayout),
-                                               toggleLayouts)
-import           XMonad.Operations            (kill, restart, windows)
-import           XMonad.StackSet              (focusDown, focusUp, sink,
-                                               swapDown, swapMaster, swapUp)
-import           XMonad.Util.Cursor           (setDefaultCursor)
-import qualified XMonad.Util.ExtensibleState
-import           XMonad.Util.EZConfig         (mkKeymap)
-import           XMonad.Util.Run              (safeSpawn, spawnPipe)
-import           XMonad.Util.WorkspaceCompare (getSortByIndex)
+import Control.Applicative
+import Control.Monad.IO.Class       (MonadIO(..))
+import Control.Monad.State          (gets)
+import Control.Monad.Trans.Maybe    (MaybeT(..))
+import Data.Bits                    ((.|.))
+import Data.ByteString              (ByteString)
+import Data.Default.Class           (def)
+import Data.Map                     (Map)
+import Data.Monoid                  (All, Endo)
+import Graphics.X11.Types           (enterWindowMask, propertyChangeMask,
+                                     structureNotifyMask)
+import System.Exit                  (ExitCode(ExitSuccess), exitWith)
+import System.IO                    (Handle, hPutStrLn)
+import System.Posix.Files           (createNamedPipe, namedPipeMode,
+                                     ownerReadMode, ownerWriteMode,
+                                     readSymbolicLink)
+import System.Posix.Types           (ProcessID)
+import XMonad                       (X, XConfig)
+import XMonad.Actions.CycleWS       (Direction1D(Next, Prev), WSType(AnyWS),
+                                     moveTo, shiftTo)
+import XMonad.Hooks.DynamicLog      (PP(..), dynamicLogWithPP, dzenEscape,
+                                     shorten, wrap, xmobarColor, xmobarStrip)
+import XMonad.Hooks.InsertPosition  (Focus(Newer), Position(Below),
+                                     insertPosition)
+import XMonad.Hooks.ManageDocks     (avoidStruts, docksEventHook,
+                                     docksStartupHook, manageDocks)
+import XMonad.Hooks.SetWMName       (setWMName)
+import XMonad.Layout.NoBorders      (noBorders)
+import XMonad.Layout.ToggleLayouts  (ToggleLayout(ToggleLayout), toggleLayouts)
+import XMonad.Operations            (kill, restart, windows)
+import XMonad.StackSet              (focusDown, focusUp, sink, swapDown,
+                                     swapMaster, swapUp)
+import XMonad.Util.Cursor           (setDefaultCursor)
+import XMonad.Util.EZConfig         (mkKeymap)
+import XMonad.Util.Run              (safeSpawn, spawnPipe)
+import XMonad.Util.WorkspaceCompare (getSortByIndex)
 
 import qualified Data.ByteString as ByteString
 -- import qualified Data.Typeable              as Typeable
 import qualified XMonad                     as X
 import qualified XMonad.Hooks.ManageHelpers
-import qualified XMonad.StackSet            as X (Stack)
+import qualified XMonad.StackSet            as X (Stack(Stack))
 import qualified XMonad.StackSet            as X.Stack
 import qualified XMonad.Util.Run
 
@@ -127,7 +122,7 @@ layoutHook =
   x1 = noBorders X.Full
 
   x2 = y1 X.||| y2
-  y1 = mitchellLayout (7/10) (8/10) 0 0 0
+  y1 = mitchellLayout (7/10) (8/10) 0 (Zoom 0 0)
   y2 = X.Tall 1 (3/100) (1/2)
 
 -- Our preferred terminal application.
@@ -264,17 +259,10 @@ myKeymap =
   -- In MitchellLayout with the second master above the first, we pretend the
   -- master and second master have swapped positions in the stack, so j/k
   -- movement feels more natural.
-  , ("M-j",
-      runKM
-        (handleModj
-          <$> getCurrentStack
-          <*> kX XMonad.Util.ExtensibleState.get))
+  , ("M-j", handleModj)
 
-  , ("M-k", do
-      runKM
-        (handleModk
-          <$> getCurrentStack
-          <*> kX XMonad.Util.ExtensibleState.get))
+  , ("M-k", handleModk)
+
 
   -- Mod-m: swap the currently-selected window with the master window.
   , ("M-m", windows swapMaster)
@@ -289,7 +277,7 @@ myKeymap =
 
   -- Mod-Shift-j and Mod-Shift-k: move up and down through windows in the
   -- current workspace, dragging the currently-selected window with us.
-  , ("M-S-j", windows swapDown)
+  , ("M-S-j", handleModJ)
   , ("M-S-k", windows swapUp)
 
   -- Mod-Alt-h and Mod-Alt-l: grow or shrink the master pane by a little bit.
@@ -305,7 +293,7 @@ myKeymap =
   , ("M-M1-k", X.sendMessage (Bloop 'k'))
 
   , ("M-M1-m", X.sendMessage (Bloop 'm'))
-  , ("M-M1-n", X.sendMessage (Bloop 'n'))
+  -- , ("M-M1-n", X.sendMessage (Bloop 'n'))
   , ("M-M1-0", X.sendMessage (Bloop '0'))
 
   -- Mod-Shift-r: restart xmonad
@@ -315,40 +303,33 @@ myKeymap =
   , ("M-S-q", liftIO (exitWith ExitSuccess))
   ]
 
-getCurrentStack :: K () (X.Stack X.Window)
-getCurrentStack =
-  (ContT⨾ K)
-    (\k ->
-      gets (X.windowset⨾ X.Stack.current⨾ X.Stack.workspace⨾ X.Stack.stack) >>=
-        maybe (pure ()) k)
+handleModj :: X ()
+handleModj =
+  windows focusDown
 
-handleModj :: X.Stack X.Window -> MitchState -> X ()
-handleModj stack = \case
-  MitchStateDoSwapJK ->
-    case stack of
-      StackSelecting1of1 -> pure ()
-      StackSelecting1of2 -> windows focusDown
-      StackSelecting1ofN -> windows (focusDown ∘ focusDown)
-      StackSelecting2ofN -> windows focusUp
-      StackSelectingNofN -> windows (focusDown ∘ focusDown)
-      _                  -> windows focusDown
+handleModk :: X ()
+handleModk =
+  windows focusUp
 
-  MitchStateDontSwapJK ->
-    windows focusDown
+handleModJ :: X ()
+handleModJ =
+  windows swapDown
 
-handleModk :: X.Stack X.Window -> MitchState -> X ()
-handleModk stack = \case
-  MitchStateDoSwapJK ->
-    case stack of
-      StackSelecting1of1 -> pure ()
-      StackSelecting1ofN -> windows focusDown
-      StackSelecting2of2 -> windows focusDown
-      StackSelecting2ofN -> windows (focusUp ∘ focusUp)
-      StackSelecting3ofN -> windows (focusUp ∘ focusUp)
-      _                  -> windows focusUp
+swapDownDown :: X.Stack.StackSet i l a s sd -> X.Stack.StackSet i l a s sd
+swapDownDown = X.Stack.modify' $ \case
+  X.Stack x ys [] ->
+    case reverse ys of
+      []     -> X.Stack x []  []
+      [y]    -> X.Stack x []  [y]
+      y:z:zs -> X.Stack x [y] (zs ++ [z])
 
-  MitchStateDontSwapJK ->
-    windows focusUp
+  X.Stack x ys [z] ->
+    case reverse ys of
+      []    -> X.Stack x [] [z]
+      y:ys' -> X.Stack x [z,y] ys'
+
+  X.Stack x ys (z:z':zs) ->
+    X.Stack x (z:z':ys) zs
 
 pattern StackSelecting1of1 <- X.Stack.Stack _ []    []
 pattern StackSelecting1of2 <- X.Stack.Stack _ []    [_]
@@ -406,28 +387,3 @@ cmdlinePath pid =
 
 -- δ² :: (Functor f, Functor g) => (a -> b) -> (f (g a)) -> (f (g b))
 -- δ² = fmap ∘ fmap
-
-newtype K r a
-  = K (ContT r X a)
-  deriving stock (Functor)
-  deriving newtype (Applicative, Monad)
-
-runK :: K r r -> X r
-runK (K x) =
-  runContT x pure
-
-runKM :: K r (X r) -> X r
-runKM (K x) =
-  runContT x id
-
-kX :: X a -> K r a
-kX =
-  lift⨾ K
-
--- instance Applicative K where
---   pure x = K (pure x)
---   K f <*> K x = K (f <*> x)
-
--- instance Monad K where
---   return = pure
---   K x >>= f = K (x >>= f⨾ unK)
