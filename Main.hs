@@ -39,7 +39,7 @@ import XMonad.Hooks.SetWMName       (setWMName)
 import XMonad.Layout.NoBorders      (noBorders)
 import XMonad.Layout.ToggleLayouts  (ToggleLayout(ToggleLayout), toggleLayouts)
 import XMonad.Operations            (kill, restart, windows)
-import XMonad.StackSet              (focusDown, focusUp, sink, swapDown,
+import XMonad.StackSet              (focusDown, focusUp, greedyView, sink, swapDown,
                                      swapMaster, swapUp)
 import XMonad.Util.Cursor           (setDefaultCursor)
 import XMonad.Util.EZConfig         (mkKeymap)
@@ -250,6 +250,13 @@ myKeymap =
 
   -- Mod-space: next layout
   , ("M-<Space>", X.sendMessage X.NextLayout)
+
+  , ("M-1", windows (greedyView "α"))
+  , ("M-2", windows (greedyView "β"))
+  , ("M-3", windows (greedyView "γ"))
+  , ("M-4", windows (greedyView "δ"))
+  , ("M-5", windows (greedyView "ε"))
+  , ("M-6", windows (greedyView "ζ"))
 
   -- Mod-h and Mod-l: move left and right through workspaces.
   , ("M-h", moveTo Prev AnyWS)
